@@ -1,0 +1,19 @@
+.DS_Store
+.venv/
+__pycache__/
+*.py[cod]
+
+# Never commit claimant records or generated claim artifacts.
+claim-cases/
+case-data/
+input/
+output/
+review/
+claim-manifest.json
+submission-receipt.md
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.tif
+*.tiff

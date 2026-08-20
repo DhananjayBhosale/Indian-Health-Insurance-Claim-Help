@@ -1,0 +1,5 @@
+interface:
+  display_name: "Indian Health Insurance Claim Help"
+  short_description: "Audit Indian health reimbursement claim PDFs"
+  brand_color: "#0F766E"
+  default_prompt: "Use $indian-health-insurance-claim-help to audit my reimbursement documents and create hospitalization, pre-hospitalization, and post-hospitalization PDF packets."

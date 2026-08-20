@@ -1,0 +1,43 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y poppler-utils
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m py_compile scripts/claim_packet.py scripts/new_claim_case.py
+      - run: python -m json.tool assets/claim-manifest.example.json > /dev/null
+      - run: bash -n scripts/render_packet.sh
+      - run: command -v pdfinfo && command -v pdftoppm
+      - run: python -m unittest discover -s tests -v
+
+  macos-renderer:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install poppler
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt
+      - run: command -v pdfinfo && command -v pdftoppm
+      - run: python -m unittest discover -s tests -v

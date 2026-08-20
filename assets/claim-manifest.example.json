@@ -1,0 +1,319 @@
+{
+  "schema_version": 1,
+  "case": {
+    "case_id": "example-health-claim",
+    "insurer": "Example Health Insurer",
+    "product": "Example Product",
+    "uin": "EXAMPLE-UIN",
+    "patient_name": "Sample Patient",
+    "policy_reference": "POLICY-EXAMPLE",
+    "claim_reference": "",
+    "main_claim_reference": "",
+    "claim_type": "hospitalization_reimbursement",
+    "claim_route": "main_with_pre_and_post",
+    "submission_channel": "online_portal",
+    "admission_date": "2026-01-10",
+    "discharge_date": "2026-01-12",
+    "claimed_amount": "14500.00",
+    "currency": "INR"
+  },
+  "verification": {
+    "tpa": "",
+    "checked_on": "2026-08-19",
+    "official_claim_form_url": "https://example.invalid/current-claim-form",
+    "official_policy_url": "https://example.invalid/current-policy-wording",
+    "portal_rules_url": "https://example.invalid/current-claim-portal",
+    "portal_rules_confirmed": false,
+    "coverage_window": {
+      "pre_start": "2025-12-12",
+      "pre_end": "2026-01-09",
+      "post_start": "2026-01-13",
+      "post_end": "2026-03-12",
+      "authority_url": "https://example.invalid/current-policy-wording"
+    },
+    "filing_deadlines": {
+      "hospitalization_and_pre_due": "2026-01-27",
+      "post_due": "2026-03-27",
+      "authority_url": "https://example.invalid/current-policy-wording"
+    },
+    "portal": {
+      "rule_scope": "initial reimbursement upload for this policy and TPA",
+      "accepted_file_types": ["pdf"],
+      "max_file_mb": null,
+      "max_total_mb": null,
+      "max_files": null,
+      "unpublished_rules": [],
+      "authority_url": "https://example.invalid/current-claim-portal"
+    },
+    "notes": "Replace all synthetic example values with verified case facts and official URLs."
+  },
+  "conditions": {
+    "surgery": false,
+    "implant": false,
+    "accident": false,
+    "death_claim": false,
+    "non_network_hospital": false,
+    "other_insurer_involved": false,
+    "ambulance_claimed": false,
+    "maternity": false
+  },
+  "rules": {
+    "source_roots": ["input"],
+    "required_case_roles": [
+      "claim_form",
+      "identity",
+      "bank",
+      "discharge"
+    ],
+    "compatibility_target_mb": 5,
+    "pack_definitions": [
+      {
+        "id": "01-claim-form-bank",
+        "label": "Claim form, identity, KYC, and bank proof",
+        "max_file_mb": null
+      },
+      {
+        "id": "02-hospitalization-core",
+        "label": "Hospitalization clinical records and discharge",
+        "max_file_mb": null
+      },
+      {
+        "id": "03-hospital-bills-receipts",
+        "label": "Hospital bills, breakups, and payment receipts",
+        "max_file_mb": null
+      },
+      {
+        "id": "04-pre-hospitalization",
+        "label": "Pre-hospitalization evidence chains",
+        "max_file_mb": null
+      },
+      {
+        "id": "05-post-hospitalization",
+        "label": "Post-hospitalization evidence chains",
+        "max_file_mb": null
+      },
+      {
+        "id": "06-conditional-other",
+        "label": "Verified conditional and other records",
+        "max_file_mb": null
+      }
+    ]
+  },
+  "expenses": [
+    {
+      "id": "hospital-001",
+      "phase": "hospitalization",
+      "kind": "hospital",
+      "date": "2026-01-12",
+      "issuer": "Sample Hospital",
+      "invoice_number": "HOSP-001",
+      "description": "Hospitalization final bill",
+      "billed_amount": "12000.00",
+      "claim_amount": "12000.00",
+      "not_claimed_reason": ""
+    },
+    {
+      "id": "pre-diagnostic-001",
+      "phase": "pre",
+      "kind": "diagnostic",
+      "date": "2026-01-08",
+      "issuer": "Sample Diagnostics",
+      "invoice_number": "LAB-001",
+      "description": "Lipid profile (cholesterol test)",
+      "billed_amount": "1500.00",
+      "claim_amount": "1500.00",
+      "not_claimed_reason": ""
+    },
+    {
+      "id": "post-medicine-001",
+      "phase": "post",
+      "kind": "medicine",
+      "date": "2026-01-18",
+      "issuer": "Sample Pharmacy",
+      "invoice_number": "PHARM-001",
+      "description": "Post-hospitalization prescribed medicine",
+      "billed_amount": "1000.00",
+      "claim_amount": "1000.00",
+      "not_claimed_reason": ""
+    }
+  ],
+  "documents": [
+    {
+      "id": "claim-form",
+      "path": "input/01-claim-form.pdf",
+      "pages": null,
+      "phase": "administrative",
+      "document_type": "Signed claim form Part A",
+      "date": "2026-01-20",
+      "expense_ids": [],
+      "evidence_roles": ["claim_form"],
+      "packs": ["01-claim-form-bank"],
+      "delivery_mode": "assemble",
+      "decision": "include",
+      "exclusion_reason": "",
+      "original_status": "scan_of_signed_original",
+      "expected_sha256": "",
+      "notes": "Hospital-only sections must be completed by the hospital."
+    },
+    {
+      "id": "patient-id",
+      "path": "input/02-patient-id.pdf",
+      "pages": null,
+      "phase": "administrative",
+      "document_type": "Patient identity proof",
+      "date": "",
+      "expense_ids": [],
+      "evidence_roles": ["identity"],
+      "packs": ["01-claim-form-bank"],
+      "decision": "include",
+      "exclusion_reason": "",
+      "original_status": "self_attested_copy",
+      "expected_sha256": "",
+      "notes": "Use only the identity/KYC set required by the current claim route."
+    },
+    {
+      "id": "bank-proof",
+      "path": "input/03-bank-proof.pdf",
+      "pages": null,
+      "phase": "administrative",
+      "document_type": "Personalized cancelled cheque or accepted bank proof",
+      "date": "",
+      "expense_ids": [],
+      "evidence_roles": ["bank"],
+      "packs": ["01-claim-form-bank"],
+      "decision": "include",
+      "exclusion_reason": "",
+      "original_status": "scan_of_original",
+      "expected_sha256": "",
+      "notes": "Confirm payee name, account number, and IFSC are readable."
+    },
+    {
+      "id": "discharge-summary",
+      "path": "input/04-discharge-summary.pdf",
+      "pages": null,
+      "phase": "hospitalization",
+      "document_type": "Discharge summary",
+      "date": "2026-01-12",
+      "expense_ids": [],
+      "evidence_roles": ["discharge", "clinical_record"],
+      "packs": ["02-hospitalization-core", "04-pre-hospitalization", "05-post-hospitalization"],
+      "decision": "include",
+      "exclusion_reason": "",
+      "original_status": "digital_original",
+      "expected_sha256": "",
+      "notes": "The pre/post packs use this to establish linkage to the main admission."
+    },
+    {
+      "id": "hospital-final-bill",
+      "path": "input/05-hospital-final-bill.pdf",
+      "pages": null,
+      "phase": "hospitalization",
+      "document_type": "Itemized hospital final bill",
+      "date": "2026-01-12",
+      "expense_ids": ["hospital-001"],
+      "evidence_roles": ["invoice"],
+      "packs": ["03-hospital-bills-receipts"],
+      "decision": "include",
+      "exclusion_reason": "",
+      "original_status": "digital_original",
+      "expected_sha256": "",
+      "notes": ""
+    },
+    {
+      "id": "hospital-payment-receipt",
+      "path": "input/06-hospital-payment-receipt.pdf",
+      "pages": null,
+      "phase": "hospitalization",
+      "document_type": "Hospital payment receipt",
+      "date": "2026-01-12",
+      "expense_ids": ["hospital-001"],
+      "evidence_roles": ["payment_proof"],
+      "packs": ["03-hospital-bills-receipts"],
+      "decision": "include",
+      "exclusion_reason": "",
+      "original_status": "scan_of_original",
+      "expected_sha256": "",
+      "notes": "This supports the final bill; it is not a second expense."
+    },
+    {
+      "id": "pre-test-advice",
+      "path": "input/07-pre-test-advice.pdf",
+      "pages": null,
+      "phase": "pre",
+      "document_type": "Doctor advice for diagnostic test",
+      "date": "2026-01-07",
+      "expense_ids": ["pre-diagnostic-001"],
+      "evidence_roles": ["clinical_advice"],
+      "packs": ["04-pre-hospitalization"],
+      "decision": "include",
+      "exclusion_reason": "",
+      "original_status": "scan_of_original",
+      "expected_sha256": "",
+      "notes": ""
+    },
+    {
+      "id": "pre-test-report",
+      "path": "input/08-pre-test-report.pdf",
+      "pages": null,
+      "phase": "pre",
+      "document_type": "Complete diagnostic report",
+      "date": "2026-01-08",
+      "expense_ids": ["pre-diagnostic-001"],
+      "evidence_roles": ["clinical_result"],
+      "packs": ["04-pre-hospitalization"],
+      "decision": "include",
+      "exclusion_reason": "",
+      "original_status": "digital_original",
+      "expected_sha256": "",
+      "notes": "Keep every substantive report page contiguous."
+    },
+    {
+      "id": "pre-test-paid-invoice",
+      "path": "input/09-pre-test-paid-invoice.pdf",
+      "pages": null,
+      "phase": "pre",
+      "document_type": "Paid diagnostic invoice",
+      "date": "2026-01-08",
+      "expense_ids": ["pre-diagnostic-001"],
+      "evidence_roles": ["invoice", "payment_proof"],
+      "packs": ["04-pre-hospitalization"],
+      "decision": "include",
+      "exclusion_reason": "",
+      "original_status": "digital_original",
+      "expected_sha256": "",
+      "notes": ""
+    },
+    {
+      "id": "post-prescription",
+      "path": "input/10-post-prescription.pdf",
+      "pages": null,
+      "phase": "post",
+      "document_type": "Post-hospitalization prescription",
+      "date": "2026-01-17",
+      "expense_ids": ["post-medicine-001"],
+      "evidence_roles": ["clinical_advice"],
+      "packs": ["05-post-hospitalization"],
+      "decision": "include",
+      "exclusion_reason": "",
+      "original_status": "scan_of_original",
+      "expected_sha256": "",
+      "notes": ""
+    },
+    {
+      "id": "post-pharmacy-paid-bill",
+      "path": "input/11-post-pharmacy-paid-bill.pdf",
+      "pages": null,
+      "phase": "post",
+      "document_type": "Paid itemized pharmacy bill",
+      "date": "2026-01-18",
+      "expense_ids": ["post-medicine-001"],
+      "evidence_roles": ["invoice", "payment_proof"],
+      "packs": ["05-post-hospitalization"],
+      "decision": "include",
+      "exclusion_reason": "",
+      "original_status": "digital_original",
+      "expected_sha256": "",
+      "notes": "Only prescription-supported lines are included in the claim amount."
+    }
+  ]
+}
