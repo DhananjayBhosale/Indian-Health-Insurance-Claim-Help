@@ -13,7 +13,7 @@ Pages that still say "30 days, or 45 with investigation" quote the repealed 2016
 ## Intimation
 
 - There is no single legal deadline. The PMC asks for intimation "at the earliest possible time"; the policy sets any period (often 24 hours after an emergency admission or 48 hours before a planned one).
-- A claim must not be rejected or closed only because intimation was late (PMC Ch. V, 1(ii)). If the claimant has not intimated, ask them to do it now through the insurer's app, website, or toll-free number, and record the intimation number as `case.claim_reference`.
+- A claim must not be rejected or closed for late intimation or for missing documents (PMC Ch. V, 1(ii)). If the claimant has not intimated, ask them to do it now through the insurer's app, website, or toll-free number, and record the intimation number as `case.claim_reference`.
 - Filing deadlines for the claim documents are still policy-specific. Use the earlier date when sources conflict. If a deadline has passed, any explanation must be the claimant's own facts; never write a reason for them.
 
 ## Cashless or reimbursement
@@ -60,7 +60,7 @@ When the settlement letter arrives, compare it with the bill ledger, one row per
 
 - A rejection must be approved by the insurer's Claims Review Committee (HMC 17(a)).
 - The letter must give full reasons with reference to the specific policy terms (HMC 17(b)). If it does not, ask for them in writing.
-- Late intimation alone is not a valid reason (PMC Ch. V, 1(ii)).
+- Neither late intimation nor missing documents is a valid reason to reject or close a claim (PMC Ch. V, 1(ii)).
 
 ## Complaint ladder
 
