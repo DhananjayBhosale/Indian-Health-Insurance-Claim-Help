@@ -96,6 +96,7 @@ Require all of the following:
 
 - `sum(expense.claim_amount) == case.claimed_amount`;
 - each expense is counted once, even when it has multiple receipts/pages;
+- each bill's line items add up to its printed total, and its receipts cover its claim_amount;
 - hospitalization, pre, post, and other subtotals independently match the claim form/portal;
 - every partial claim has an explicit, truthful reason for the difference;
 - repeated issuer + invoice number + date + amount combinations are investigated;
