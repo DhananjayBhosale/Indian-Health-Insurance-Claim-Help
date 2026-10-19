@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -1140,6 +1141,81 @@ class ClaimPacketCliTests(unittest.TestCase):
         }
         self.assertIn("OUTSIDE_CONFIGURED_WINDOW", warnings)
 
+    def test_unclaimed_line_needs_no_supporting_evidence(self) -> None:
+        manifest = self._manifest()
+        post = self._row(manifest, "expenses", "exp-post")
+        post["claim_amount"] = "0.00"
+        post["not_claimed_reason"] = "Not on the prescription"
+        manifest["case"]["claimed_amount"] = "150.00"  # type: ignore[index]
+        self._row(manifest, "documents", "doc-post-prescription")["date"] = "2026-08-21"
+        verification = manifest["verification"]  # type: ignore[index]
+        for key in ("post_start", "post_end"):
+            del verification["coverage_window"][key]  # type: ignore[index]
+        del verification["filing_deadlines"]["post_due"]  # type: ignore[index]
+        manifest_path = self._write_manifest(manifest)
+
+        self._assert_code(self._run("audit", manifest_path, "unclaimed-line"), 0)
+
+    def test_unclaimed_hospital_and_other_lines_need_no_evidence(self) -> None:
+        manifest = self._manifest()
+        hospital = self._row(manifest, "expenses", "exp-hospital")
+        hospital["claim_amount"] = "0.00"
+        hospital["not_claimed_reason"] = "Settled cashless under the main claim"
+        manifest["expenses"].append(  # type: ignore[union-attr]
+            {
+                "id": "exp-other",
+                "phase": "post",
+                "kind": "other",
+                "date": "2026-08-21",
+                "issuer": "Synthetic Store",
+                "invoice_number": "OTH-001",
+                "description": "Walking stick",
+                "billed_amount": "40.00",
+                "claim_amount": "0.00",
+                "not_claimed_reason": "Not covered",
+            }
+        )
+        manifest["case"]["claimed_amount"] = "80.00"  # type: ignore[index]
+        manifest["rules"]["required_case_roles"] = ["claim_form", "identity", "bank"]  # type: ignore[index]
+        manifest["documents"] = [  # type: ignore[index]
+            document for document in manifest["documents"]  # type: ignore[union-attr]
+            if document["id"] != "doc-discharge"
+        ]
+        (self.sources / "discharge.pdf").unlink()
+        manifest_path = self._write_manifest(manifest)
+
+        self._assert_code(self._run("audit", manifest_path, "unclaimed-kinds"), 0)
+
+    def test_line_items_must_add_up_to_the_billed_amount(self) -> None:
+        manifest = self._manifest()
+        hospital = self._row(manifest, "expenses", "exp-hospital")
+        # A discount is negative; a round-off keeps its printed sign.
+        hospital["line_items"] = ["80.00", "25.00", "-5.40", "0.40"]
+        self._assert_code(self._run("audit", self._write_manifest(manifest), "items-match"), 0)
+
+        hospital["line_items"] = ["80.00", "25.00"]
+        self._assert_code(self._run("audit", self._write_manifest(manifest), "items-differ"), 2)
+        self.assertIn("LINE_ITEMS_TOTAL", self._blocker_codes(self._report("items-differ")))
+
+    def test_payments_must_cover_the_claim_from_linked_receipts(self) -> None:
+        manifest = self._manifest()
+        hospital = self._row(manifest, "expenses", "exp-hospital")
+        hospital["payments"] = [{"document_id": "doc-hospital-bill", "amount": "100.00"}]
+        self._assert_code(self._run("audit", self._write_manifest(manifest), "paid"), 0)
+
+        hospital["payments"] = [{"document_id": "doc-hospital-bill", "amount": "60.00"}]
+        self._assert_code(self._run("audit", self._write_manifest(manifest), "short"), 2)
+        self.assertIn("PAYMENT_SHORT", self._blocker_codes(self._report("short")))
+        self._run_draft(self._write_manifest(manifest), "short-draft")
+        self.assertEqual(
+            len(list((self.case_root / "short-draft" / "REVIEW_ONLY").glob("*DRAFT*.pdf"))), 1
+        )
+
+        # A receipt linked to another expense cannot pay for this one.
+        hospital["payments"] = [{"document_id": "doc-pre-invoice", "amount": "100.00"}]
+        self._assert_code(self._run("audit", self._write_manifest(manifest), "unlinked"), 2)
+        self.assertIn("PAYMENTS", self._blocker_codes(self._report("unlinked")))
+
     def test_advice_dated_after_the_bill_blocks_but_draft_still_builds(self) -> None:
         manifest = self._manifest()
         self._row(manifest, "documents", "doc-pre-advice")["date"] = "2026-08-06"
@@ -1201,7 +1277,7 @@ class ClaimPacketCliTests(unittest.TestCase):
 
         self.assertFalse((self.case_root / "no-calendar" / "claim-deadlines.ics").exists())
 
-    def _phone_photo_manifest(self) -> tuple[Path, bytes]:
+    def _phone_photo_manifest(self, gain_map: bool = False) -> tuple[Path, bytes]:
         """Replace the PNG report with a noisy, EXIF-rotated phone photo."""
         photo = Image.effect_noise((1200, 900), 40).convert("RGB")
         ImageDraw.Draw(photo).rectangle((0, 0, 300, 225), fill="red")
@@ -1209,7 +1285,12 @@ class ClaimPacketCliTests(unittest.TestCase):
         exif[0x0112] = 6  # stored sideways; viewers rotate it 90 degrees clockwise
         exif[0x010E] = "SYNTHETIC-PRIVATE-METADATA"
         photo_path = self.sources / "pre-result.jpg"
-        photo.save(photo_path, "JPEG", quality=85, exif=exif.tobytes())
+        if gain_map:
+            # iPhone HDR photos carry a second, smaller image (MPO) after the main one.
+            second = Image.effect_noise((600, 450), 60).convert("RGB")
+            photo.save(photo_path, "MPO", quality=85, exif=exif.tobytes(), save_all=True, append_images=[second])
+        else:
+            photo.save(photo_path, "JPEG", quality=85, exif=exif.tobytes())
         manifest = self._manifest()
         (self.sources / "pre-result.png").unlink()
         result = next(
@@ -1243,6 +1324,41 @@ class ClaimPacketCliTests(unittest.TestCase):
             source_bytes[source_bytes.index(start_of_scan):],
         )
         self.assertLess(len(embedded), len(source_bytes))
+
+    def test_phone_hdr_photo_is_one_page_and_stays_jpeg(self) -> None:
+        manifest_path, source_bytes = self._phone_photo_manifest(gain_map=True)
+        with Image.open(self.sources / "pre-result.jpg") as photo:
+            self.assertEqual(photo.format, "MPO")
+
+        self._assert_code(self._run("build", manifest_path, "hdr-photo"), 0)
+
+        reader = PdfReader(str(self.case_root / "hdr-photo" / "SUBMIT" / "03-pre.pdf"), strict=False)
+        self.assertEqual(len(reader.pages), 3)
+        images = [reference.get_object() for reference in reader.pages[1]["/Resources"]["/XObject"].values()]
+        self.assertEqual(list(images[0]["/Filter"]), ["/DCTDecode"])
+        embedded = images[0]._data
+        self.assertTrue(embedded.endswith(b"\xff\xd9"))
+        self.assertEqual(embedded.count(b"\xff\xd8"), 1)
+        self.assertLess(len(embedded), len(source_bytes))
+
+    def test_jpeg_passthrough_keeps_scans_after_a_segment_containing_ff_d9(self) -> None:
+        module = load_claim_packet()
+        photo = Image.new("RGB", (64, 48), "white")
+        ImageDraw.Draw(photo).rectangle((8, 8, 40, 30), fill="navy")
+        buffer = BytesIO()
+        photo.save(buffer, "JPEG", progressive=True, quality=90, restart_marker_rows=1)
+        data = buffer.getvalue()
+        self.assertIn(b"\xff\xd0", data)  # restart markers inside scan data are skipped too
+        second_scan = data.index(b"\xff\xda", data.index(b"\xff\xda") + 2)
+        comment = b"\xff\xfe\x00\x06\xff\xd9\x00\x00"
+        progressive = data[:second_scan] + comment + data[second_scan:]
+        appended_image = b"\xff\xd8\xff\xd9"
+
+        payload = module.jpeg_without_metadata(progressive + appended_image)
+
+        self.assertEqual(payload, progressive)
+        with Image.open(BytesIO(payload)) as kept, Image.open(BytesIO(data)) as original:
+            self.assertEqual(kept.tobytes(), original.tobytes())
 
     @unittest.skipUnless(shutil.which("pdftoppm"), "Poppler is not installed")
     def test_rotated_phone_photo_renders_upright(self) -> None:

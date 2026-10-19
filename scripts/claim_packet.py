@@ -131,6 +131,7 @@ MISSING_DOCUMENT_BLOCKERS = {
     "DISCHARGE_REQUIRED",
     "MISSING_CASE_EVIDENCE",
     "MISSING_EXPENSE_EVIDENCE",
+    "PAYMENT_SHORT",
 }
 UNCONFIRMED_FACT_BLOCKERS = {
     "ADVICE_AFTER_BILL",
@@ -138,6 +139,7 @@ UNCONFIRMED_FACT_BLOCKERS = {
     "CONDITION_UNVERIFIED",
     "EXPENSE_DETAIL",
     "FILING_DEADLINE_UNVERIFIED",
+    "LINE_ITEMS_TOTAL",
     "MAIN_CLAIM_REFERENCE",
     "OUTSIDE_CONFIGURED_WINDOW",
     "POLICY_WINDOW_UNVERIFIED",
@@ -372,7 +374,8 @@ def inspect_source(path: Path) -> SourceInfo:
         return SourceInfo(path, digest, page_count, suffix, signed, has_acroform)
 
     with Image.open(path) as image:
-        page_count = int(getattr(image, "n_frames", 1))
+        # Phone HDR and portrait photos (MPO) store a gain or depth map as a second frame, not a page.
+        page_count = 1 if image.format == "MPO" else int(getattr(image, "n_frames", 1))
         if page_count < 1:
             raise ValueError("image contains no frames")
         image.seek(0)
@@ -421,13 +424,13 @@ def parse_page_spec(spec: Any, page_count: int) -> list[int]:
     return selected
 
 
-def decimal_value(value: Any, field: str) -> Decimal:
+def decimal_value(value: Any, field: str, allow_negative: bool = False) -> Decimal:
     try:
         result = Decimal(str(value))
     except (InvalidOperation, ValueError):
         raise ValueError(f"{field} must be a decimal value") from None
-    if not result.is_finite() or result < 0:
-        raise ValueError(f"{field} must be a non-negative finite decimal")
+    if not result.is_finite() or (result < 0 and not allow_negative):
+        raise ValueError(f"{field} must be a {'' if allow_negative else 'non-negative '}finite decimal")
     try:
         quantized = result.quantize(Decimal("0.01"))
     except InvalidOperation:
@@ -793,6 +796,7 @@ def audit_manifest(
     expense_map: dict[str, dict[str, Any]] = {}
     expense_amounts: dict[str, tuple[Decimal, Decimal]] = {}
     expense_dates: dict[str, date] = {}
+    expense_payments: dict[str, list[tuple[str, Decimal]]] = {}
     duplicate_events: dict[tuple[str, str, str, str], tuple[str, str]] = {}
     total_claimed = Decimal("0.00")
     phases_total: dict[str, Decimal] = defaultdict(lambda: Decimal("0.00"))
@@ -848,6 +852,61 @@ def audit_manifest(
         except ValueError as exc:
             billed = claimed = Decimal("0.00")
             issue(report, "blocker", "EXPENSE_AMOUNT", str(exc), expense_id=expense_id)
+        # Optional arithmetic: line_items must add up to the printed total. Discounts are
+        # negative, a round-off keeps its printed sign, and taxes are items too.
+        line_items = expense.get("line_items")
+        if line_items is not None:
+            try:
+                if not isinstance(line_items, list) or not line_items:
+                    raise ValueError(f"expense {expense_id} line_items must be a non-empty list of amounts")
+                items_total = sum(
+                    (
+                        decimal_value(item, f"expense {expense_id} line_items", allow_negative=True)
+                        for item in line_items
+                    ),
+                    Decimal("0.00"),
+                )
+                if items_total != billed:
+                    issue(
+                        report,
+                        "blocker",
+                        "LINE_ITEMS_TOTAL",
+                        f"line items of {expense.get('description', expense_id)} add up to "
+                        f"{items_total:.2f}, but billed_amount is {billed:.2f}; recheck each line "
+                        "and the printed total",
+                        expense_id=expense_id,
+                    )
+            except ValueError as exc:
+                issue(report, "blocker", "LINE_ITEMS", str(exc), expense_id=expense_id)
+        # Optional payments: amounts allocated to this expense from linked payment proof.
+        # Allocation is per expense, so a shared receipt is never credited in full twice.
+        payments = expense.get("payments")
+        if payments is not None:
+            try:
+                if not isinstance(payments, list) or not payments:
+                    raise ValueError(f"expense {expense_id} payments must be a non-empty list")
+                allocations: list[tuple[str, Decimal]] = []
+                for payment in payments:
+                    if not isinstance(payment, dict) or not str(payment.get("document_id", "")).strip():
+                        raise ValueError(f"expense {expense_id} payments need document_id and amount")
+                    payment_document = str(payment["document_id"]).strip()
+                    if payment_document in (item[0] for item in allocations):
+                        raise ValueError(
+                            f"expense {expense_id} lists payment document {payment_document} twice"
+                        )
+                    allocations.append(
+                        (
+                            payment_document,
+                            decimal_value(
+                                payment.get("amount"),
+                                f"expense {expense_id} payment amount",
+                                allow_negative=True,
+                            ),
+                        )
+                    )
+                expense_payments[expense_id] = allocations
+            except ValueError as exc:
+                issue(report, "blocker", "PAYMENTS", str(exc), expense_id=expense_id)
         try:
             expense_date = iso_date(expense.get("date"), f"expense {expense_id} date")
             if not expense_date:
@@ -929,15 +988,15 @@ def audit_manifest(
         "by_phase": {key: f"{value:.2f}" for key, value in sorted(phases_total.items())},
     }
 
-    has_pre = any(expense.get("phase") == "pre" for expense in expense_map.values())
-    has_post = any(expense.get("phase") == "post" for expense in expense_map.values())
+    # Only phases with a claimed amount need their policy window and deadline on record.
+    has_pre = phases_total.get("pre", Decimal(0)) > 0
+    has_post = phases_total.get("post", Decimal(0)) > 0
     if has_pre and not (coverage_dates.get("pre_start") and coverage_dates.get("pre_end")):
         issue(report, "blocker", "POLICY_WINDOW_UNVERIFIED", "pre-hospitalization coverage dates are not recorded")
     if has_post and not (coverage_dates.get("post_start") and coverage_dates.get("post_end")):
         issue(report, "blocker", "POLICY_WINDOW_UNVERIFIED", "post-hospitalization coverage dates are not recorded")
     if (
-        has_pre
-        or any(expense.get("phase") == "hospitalization" for expense in expense_map.values())
+        has_pre or phases_total.get("hospitalization", Decimal(0)) > 0
     ) and not deadline_dates.get("hospitalization_and_pre_due"):
         issue(
             report,
@@ -1287,6 +1346,7 @@ def audit_manifest(
             )
 
     roles_by_expense: dict[str, set[str]] = defaultdict(set)
+    payment_documents_by_expense: dict[str, set[str]] = defaultdict(set)
     evidence_by_expense: dict[str, list[dict[str, Any]]] = defaultdict(list)
     all_included_roles: set[str] = set()
     included_selections = [item for item in selections if item.document.get("decision") == "include"]
@@ -1305,7 +1365,8 @@ def audit_manifest(
             linked_expense_id = str(expense_id)
             expense = expense_map.get(linked_expense_id, {})
             expense_date = expense_dates.get(linked_expense_id)
-            if "clinical_advice" in roles and expense_date:
+            claimed = expense_amounts.get(linked_expense_id, (Decimal(0), Decimal(0)))[1]
+            if "clinical_advice" in roles and expense_date and claimed > 0:
                 if document_date is None:
                     issue(
                         report,
@@ -1342,6 +1403,8 @@ def audit_manifest(
                     expense_id=linked_expense_id,
                 )
             roles_by_expense[linked_expense_id] |= roles
+            if "payment_proof" in roles:
+                payment_documents_by_expense[linked_expense_id].add(document_id)
             evidence_by_expense[linked_expense_id].append(
                 {
                     "document_id": str(selection.document.get("id", "")),
@@ -1358,13 +1421,14 @@ def audit_manifest(
 
     for expense_id, expense in expense_map.items():
         kind = str(expense.get("kind", ""))
+        claimed = expense_amounts.get(expense_id, (Decimal(0), Decimal(0)))[1]
         if kind == "other":
             try:
                 required = set(list_of_strings(expense.get("required_roles"), "required_roles"))
             except ValueError as exc:
                 required = set()
                 issue(report, "blocker", "EXPENSE_REQUIRED_ROLES", str(exc), expense_id=expense_id)
-            if not required:
+            if not required and claimed > 0:
                 issue(
                     report,
                     "blocker",
@@ -1383,7 +1447,8 @@ def audit_manifest(
                 )
         else:
             required = DEFAULT_EXPENSE_ROLES.get(kind, set())
-        missing = sorted(required - roles_by_expense.get(expense_id, set()))
+        # A line kept only to disclose an unclaimed amount needs no supporting evidence.
+        missing = sorted(required - roles_by_expense.get(expense_id, set())) if claimed > 0 else []
         expense_report = expense_report_by_id.get(expense_id, {})
         expense_report["linked_evidence"] = evidence_by_expense.get(expense_id, [])
         expense_report["missing_evidence_roles"] = missing
@@ -1403,7 +1468,7 @@ def audit_manifest(
                 expense_id=expense_id,
                 missing_roles=missing,
             )
-        if kind == "implant" and not (
+        if kind == "implant" and claimed > 0 and not (
             roles_by_expense.get(expense_id, set())
             & {"clinical_record", "operation_record"}
         ):
@@ -1415,7 +1480,36 @@ def audit_manifest(
                 expense_id=expense_id,
             )
 
-    if any(expense.get("kind") == "hospital" for expense in expense_map.values()) and "discharge" not in all_included_roles:
+    for expense_id, allocations in expense_payments.items():
+        for payment_document, _ in allocations:
+            if payment_document not in payment_documents_by_expense.get(expense_id, set()):
+                issue(
+                    report,
+                    "blocker",
+                    "PAYMENTS",
+                    f"payment document {payment_document} is not an included payment_proof "
+                    f"document linked to expense {expense_id}",
+                    document_id=payment_document,
+                    expense_id=expense_id,
+                )
+        paid = sum((amount for _, amount in allocations), Decimal("0.00"))
+        claimed = expense_amounts.get(expense_id, (Decimal(0), Decimal(0)))[1]
+        if paid < claimed:
+            issue(
+                report,
+                "blocker",
+                "PAYMENT_SHORT",
+                f"payments for {expense_map[expense_id].get('description', expense_id)} add up to "
+                f"{paid:.2f}, less than the claimed {claimed:.2f}; find the missing receipt "
+                "or claim only what was paid",
+                expense_id=expense_id,
+            )
+
+    if "discharge" not in all_included_roles and any(
+        expense.get("kind") == "hospital"
+        and expense_amounts.get(expense_id, (Decimal(0), Decimal(0)))[1] > 0
+        for expense_id, expense in expense_map.items()
+    ):
         issue(report, "blocker", "DISCHARGE_REQUIRED", "hospital expense exists without discharge evidence")
 
     try:
@@ -2239,7 +2333,10 @@ def jpeg_without_metadata(data: bytes) -> bytes | None:
             offset += 1
             continue
         if marker == 0xDA:
-            return bytes(kept + data[offset:])
+            end_of_image = jpeg_end_of_image(data, offset)
+            if end_of_image is None:
+                return None
+            return bytes(kept + data[offset:end_of_image])
         end = offset + 2 + int.from_bytes(data[offset + 2 : offset + 4], "big")
         if end <= offset + 3 or end > len(data):
             return None
@@ -2252,17 +2349,49 @@ def jpeg_without_metadata(data: bytes) -> bytes | None:
     return None
 
 
+def jpeg_end_of_image(data: bytes, offset: int) -> int | None:
+    """Return the offset just past the EOI of the image whose first scan starts at offset.
+
+    Phone MPO files append a second image after the first EOI. Marker segments are
+    skipped by length, because tables or comments between progressive scans may
+    contain the bytes FF D9.
+    """
+    while offset + 2 <= len(data):
+        if data[offset] != 0xFF:
+            return None
+        marker = data[offset + 1]
+        if marker == 0xD9:
+            return offset + 2
+        if marker == 0xFF:
+            offset += 1
+            continue
+        end = offset + 2 + int.from_bytes(data[offset + 2 : offset + 4], "big")
+        if end <= offset + 3 or end > len(data):
+            return None
+        offset = end
+        if marker == 0xDA:
+            # Inside scan data, FF is followed by 00 (a stuffed byte), a restart marker, or fill.
+            while True:
+                offset = data.find(b"\xff", offset)
+                if offset < 0 or offset + 1 >= len(data):
+                    return None
+                following = data[offset + 1]
+                if following == 0x00 or 0xD0 <= following <= 0xD7:
+                    offset += 2
+                elif following == 0xFF:
+                    offset += 1
+                else:
+                    break
+    return None
+
+
 def jpeg_passthrough(source: Any, path: Path) -> tuple[bytes, int] | None:
     """Return embeddable JPEG bytes and a rotation, or None to re-encode the image.
 
     Re-encoding a phone photo as lossless PDF image data makes it several times
     larger, which breaks common 5 MB portal limits.
     """
-    if (
-        source.format != "JPEG"
-        or getattr(source, "n_frames", 1) != 1
-        or source.mode not in ("RGB", "L")
-    ):
+    if source.format not in ("JPEG", "MPO") or source.mode not in ("RGB", "L"):
         return None
     rotation = JPEG_ROTATIONS.get(source.getexif().get(0x0112, 1))
     payload = jpeg_without_metadata(path.read_bytes())

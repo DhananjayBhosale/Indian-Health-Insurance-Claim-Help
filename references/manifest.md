@@ -50,6 +50,11 @@ Required fields are:
 - `date`, `issuer`, `invoice_number`, and `description`. Make `description` the specific visible service or item, such as `Lipid profile (cholesterol test)`, rather than a generic `diagnostic test`. Do not infer a diagnosis or expand an abbreviation unless the supplied evidence supports it.
 - `billed_amount`, `claim_amount`, and `not_claimed_reason`.
 
+Optional sum checks (leave a field out to skip its check):
+
+- `line_items`: each printed line amount of the bill, as decimal strings. Enter a discount as a negative amount, a round-off with its printed sign, and tax as its own line. An advance or deposit line is a payment, not a line item; leave it out. They must add up exactly to `billed_amount`, or the audit blocks with `LINE_ITEMS_TOTAL`.
+- `payments`: `[{"document_id": "...", "amount": "..."}]`, the part of each receipt that pays this bill. Each document must be included, linked to this expense, and have the `payment_proof` role. When one receipt pays several bills, give each expense only its own share. Enter a refund as a negative amount. If the payments add up to less than `claim_amount`, the audit blocks with `PAYMENT_SHORT`.
+
 For `kind: other`, `required_roles` is mandatory and may use only the roles listed below; without it the audit cannot know the evidence chain and blocks.
 
 Audit date and phase rules:

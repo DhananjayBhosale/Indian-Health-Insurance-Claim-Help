@@ -71,7 +71,7 @@ Ask explicitly; do not infer these from filenames:
 - Accident/medico-legal: first consultation, incident statement, MLC/accident register, FIR/police papers, intoxication history or test when asked.
 - Death: death summary/certificate, nominee identity and bank proof, legal-heir/succession/NOC documents as required.
 - Maternity/newborn: obstetric history, sonography, birth papers, and policy-specific records.
-- Other insurer/co-pay/deductible: settlement letter, certified document copies, and a clear allocation of gross, other-insurer-paid, claimant-paid, excluded, and requested amounts.
+- Other insurer: settlement letter, certified document copies, and a clear allocation of gross, other-insurer-paid, excluded, and requested amounts.
 - Non-network hospital: registration number/certificate and facility/bed information when requested.
 - Late filing: a claimant-approved factual explanation only. Never manufacture a reason.
 - Physical-only evidence: retain imaging films, wet-signed originals, and any item the insurer says cannot be replaced by a scan.
@@ -90,13 +90,15 @@ Use decimal arithmetic. Keep at least these fields:
 | Description | What was supplied or performed |
 | Billed amount | Gross supported invoice amount |
 | Claimed amount | Amount requested once |
-| Not-claimed reason | Unsupported line, deductible, co-pay, other insurer, unrelated item, or claimant choice |
+| Not-claimed reason | Unsupported line, other insurer, unrelated item, or claimant choice |
 
 Require all of the following:
 
 - `sum(expense.claim_amount) == case.claimed_amount`;
 - each expense is counted once, even when it has multiple receipts/pages;
-- each bill's line items add up to its printed total, and its receipts cover its claim_amount;
+- pharmacy, lab, or implant bills already inside the hospital's final bill are evidence for it, not extra expenses;
+- co-pay and deductibles are not subtracted in advance; enter gross and net amounts where the claim form asks for them;
+- each bill's line items add up to its printed total, and its receipts cover its claim_amount (record `line_items` and `payments` so the audit checks this);
 - hospitalization, pre, post, and other subtotals independently match the claim form/portal;
 - every partial claim has an explicit, truthful reason for the difference;
 - repeated issuer + invoice number + date + amount combinations are investigated;
