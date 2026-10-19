@@ -60,9 +60,9 @@ Never say a packet "will be accepted."
 
 Creating and reviewing files does not authorize an upload, declaration, or final submission. Pause for explicit claimant confirmation immediately before any external action.
 
-Before upload, start a private receipt from [../assets/submission-receipt.template.md](../assets/submission-receipt.template.md) and complete its QA/approval section. After submission, finish the confirmation section. Record:
-
 Hash the inventory-bearing `claim-audit.json`. After packet files exist, a later audit or refused rebuild is written as `claim-audit-attempt.json/.md` and must not replace the original PDF-bound inventory. Build a changed revision in a fresh output directory.
+
+Before upload, start a private receipt from [../assets/submission-receipt.template.md](../assets/submission-receipt.template.md) and complete its QA/approval section. After submission, finish the confirmation section. Record:
 
 - insurer/TPA and claim reference;
 - submission timestamp and channel;

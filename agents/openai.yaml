@@ -1,5 +1,5 @@
 interface:
   display_name: "Indian Health Insurance Claim Help"
-  short_description: "Audit Indian health reimbursement claim PDFs"
+  short_description: "Prepare Indian health reimbursement claims"
   brand_color: "#0F766E"
-  default_prompt: "Use $indian-health-insurance-claim-help to audit my reimbursement documents and create hospitalization, pre-hospitalization, and post-hospitalization PDF packets."
+  default_prompt: "Help me prepare my health insurance reimbursement claim. Tell me which documents you need, check what I send, and tell me exactly what is missing."

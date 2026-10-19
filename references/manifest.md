@@ -50,7 +50,13 @@ Required fields are:
 - `date`, `issuer`, `invoice_number`, and `description`. Make `description` the specific visible service or item, such as `Lipid profile (cholesterol test)`, rather than a generic `diagnostic test`. Do not infer a diagnosis or expand an abbreviation unless the supplied evidence supports it.
 - `billed_amount`, `claim_amount`, and `not_claimed_reason`.
 
-For `kind: other`, provide `required_roles` so the audit knows the evidence chain.
+For `kind: other`, `required_roles` is mandatory and may use only the roles listed below; without it the audit cannot know the evidence chain and blocks.
+
+Audit date and phase rules:
+
+- A `pre` or `post` expense dated outside `verification.coverage_window` blocks while `claim_amount` is above zero. With `claim_amount` `0.00` and a `not_claimed_reason`, it stays in the ledger as a disclosed line and only warns.
+- A document with `clinical_advice` must be dated on or before the expense it supports. A later date blocks; a missing date warns.
+- A bill, receipt, or report (`invoice`, `payment_proof`, `clinical_result`) belongs to the phase of its expense. If the document's phase is not `administrative` and differs from the expense's phase, the audit blocks, even for a draft. Context records such as advice, the discharge summary, or operation notes may support any phase.
 
 ## Document fields
 

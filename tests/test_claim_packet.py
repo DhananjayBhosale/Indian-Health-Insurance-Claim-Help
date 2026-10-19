@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,6 +19,23 @@ from reportlab.pdfgen import canvas
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 CLAIM_PACKET = SKILL_ROOT / "scripts" / "claim_packet.py"
+
+
+def load_claim_packet():
+    spec = importlib.util.spec_from_file_location("claim_packet_under_test", CLAIM_PACKET)
+    module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    sys.modules[spec.name] = module  # type: ignore[union-attr]
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    return module
+
+
+def pdf_font_names(path: Path) -> set[str]:
+    names = set()
+    for page in PdfReader(str(path)).pages:
+        resources = page["/Resources"]
+        if "/Font" in resources:
+            names.update(str(font.get_object()["/BaseFont"]) for font in resources["/Font"].values())
+    return names
 
 
 class ClaimPacketCliTests(unittest.TestCase):
@@ -308,6 +327,27 @@ class ClaimPacketCliTests(unittest.TestCase):
             text=True,
         )
 
+    def _run_draft(self, manifest: Path, output_name: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                str(CLAIM_PACKET),
+                "build",
+                "--draft",
+                "--manifest",
+                str(manifest),
+                "--output-dir",
+                str(self.case_root / output_name),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    @staticmethod
+    def _row(manifest: dict[str, object], section: str, row_id: str) -> dict[str, object]:
+        return next(row for row in manifest[section] if row["id"] == row_id)  # type: ignore[index, union-attr]
+
     def _assert_code(
         self, result: subprocess.CompletedProcess[str], expected: int
     ) -> None:
@@ -367,6 +407,8 @@ class ClaimPacketCliTests(unittest.TestCase):
             self.assertNotIn("REVIEW ONLY", text)
             self.assertNotIn("Health reimbursement claim - review packet", text)
             self.assertNotIn("Claim packet audit", text)
+            self.assertNotIn("/Author", reader.metadata or {})
+            self.assertNotIn(b"Claim Help", (submit_dir / name).read_bytes())
 
         master_path = (
             self.case_root
@@ -377,6 +419,7 @@ class ClaimPacketCliTests(unittest.TestCase):
         master = PdfReader(str(master_path), strict=False)
         self.assertGreater(len(master.pages), sum(expected_pages.values()))
         self.assertIn("REVIEW ONLY", master.pages[0].extract_text() or "")
+        self.assertTrue(all(name.startswith("/Helvetica") for name in pdf_font_names(master_path)))
 
         for output in report["outputs"]:  # type: ignore[index]
             output_path = Path(output["path"])
@@ -1015,6 +1058,237 @@ class ClaimPacketCliTests(unittest.TestCase):
         }
         self.assertIn("COMPATIBILITY_TARGET", warnings)
 
+    def test_draft_build_writes_only_a_review_packet_listing_what_is_missing(self) -> None:
+        manifest = self._manifest()
+        manifest["documents"] = [  # type: ignore[index]
+            document
+            for document in manifest["documents"]  # type: ignore[index]
+            if document["id"] != "doc-pre-result"
+        ]
+        (self.sources / "pre-result.png").unlink()
+        manifest["verification"]["filing_deadlines"]["post_due"] = ""  # type: ignore[index]
+        manifest_path = self._write_manifest(manifest)
+
+        self._assert_code(self._run("build", manifest_path, "no-draft"), 2)
+        self.assertEqual(list((self.case_root / "no-draft").glob("*/*.pdf")), [])
+
+        result = self._run_draft(manifest_path, "draft")
+
+        self._assert_code(result, 2)
+        self.assertIn("not ready to upload", result.stdout)
+        output = self.case_root / "draft"
+        self.assertEqual(list((output / "SUBMIT").iterdir()), [])
+        self.assertEqual(list((output / "CANDIDATE_UPLOADS").iterdir()), [])
+        draft_path = output / "REVIEW_ONLY" / "synthetic-claim-001-DRAFT-review.pdf"
+        cover = PdfReader(str(draft_path)).pages[0].extract_text() or ""
+        self.assertIn("DRAFT - NOT READY TO UPLOAD", cover)
+        self.assertIn("Lipid profile", cover)
+        report = self._report("draft")
+        self.assertEqual(report["status"], "NOT_READY")
+        self.assertEqual(
+            [Path(item["path"]) for item in report["outputs"]],  # type: ignore[index]
+            [draft_path.resolve()],
+        )
+        markdown = (output / "claim-audit.md").read_text(encoding="utf-8")
+        needed = markdown.split("## Still needed before upload", 1)[1].split("## Blockers", 1)[0]
+        self.assertIn("### Documents to send", needed)
+        self.assertIn("complete report or result for Lipid profile", needed)
+        self.assertIn("### Facts to confirm", needed)
+        self.assertIn("post filing deadline", needed)
+
+    def test_draft_build_still_stops_for_changed_source_files(self) -> None:
+        manifest = self._manifest()
+        manifest["documents"][0]["expected_sha256"] = "0" * 64  # type: ignore[index]
+        manifest_path = self._write_manifest(manifest)
+
+        result = self._run_draft(manifest_path, "draft-hash")
+
+        self._assert_code(result, 2)
+        self.assertIn("Draft not built; fix these first: HASH_MISMATCH", result.stdout)
+        self.assertFalse((self.case_root / "draft-hash" / "REVIEW_ONLY").exists())
+
+    def test_other_expense_must_name_its_required_evidence(self) -> None:
+        manifest = self._manifest()
+        self._row(manifest, "expenses", "exp-post")["kind"] = "other"
+        manifest_path = self._write_manifest(manifest)
+
+        result = self._run("audit", manifest_path, "other-roles")
+
+        self._assert_code(result, 2)
+        self.assertIn("EXPENSE_REQUIRED_ROLES", self._blocker_codes(self._report("other-roles")))
+
+    def test_claimed_expense_outside_window_blocks_but_unclaimed_line_only_warns(self) -> None:
+        manifest = self._manifest()
+        self._row(manifest, "expenses", "exp-post")["date"] = "2026-11-05"
+        manifest_path = self._write_manifest(manifest)
+
+        self._assert_code(self._run("audit", manifest_path, "outside-claimed"), 2)
+        self.assertIn(
+            "OUTSIDE_CONFIGURED_WINDOW",
+            self._blocker_codes(self._report("outside-claimed")),
+        )
+
+        post = self._row(manifest, "expenses", "exp-post")
+        post["claim_amount"] = "0.00"
+        post["not_claimed_reason"] = "Outside the post-hospitalization window"
+        manifest["case"]["claimed_amount"] = "150.00"  # type: ignore[index]
+        manifest_path = self._write_manifest(manifest)
+
+        self._assert_code(self._run("audit", manifest_path, "outside-unclaimed"), 0)
+        warnings = {
+            item["code"] for item in self._report("outside-unclaimed")["warnings"]  # type: ignore[index]
+        }
+        self.assertIn("OUTSIDE_CONFIGURED_WINDOW", warnings)
+
+    def test_advice_dated_after_the_bill_blocks_but_draft_still_builds(self) -> None:
+        manifest = self._manifest()
+        self._row(manifest, "documents", "doc-pre-advice")["date"] = "2026-08-06"
+        manifest_path = self._write_manifest(manifest)
+
+        self._assert_code(self._run("audit", manifest_path, "late-advice"), 2)
+        self.assertIn("ADVICE_AFTER_BILL", self._blocker_codes(self._report("late-advice")))
+
+        self._assert_code(self._run_draft(manifest_path, "late-advice-draft"), 2)
+        self.assertEqual(
+            len(list((self.case_root / "late-advice-draft" / "REVIEW_ONLY").glob("*DRAFT*.pdf"))),
+            1,
+        )
+
+    def test_bill_linked_to_another_phase_blocks_even_a_draft(self) -> None:
+        manifest = self._manifest()
+        self._row(manifest, "documents", "doc-post-invoice")["phase"] = "pre"
+        manifest_path = self._write_manifest(manifest)
+
+        result = self._run_draft(manifest_path, "phase-mismatch")
+
+        self._assert_code(result, 2)
+        self.assertIn("PHASE_MISMATCH", self._blocker_codes(self._report("phase-mismatch")))
+        self.assertIn("Draft not built; fix these first: PHASE_MISMATCH", result.stdout)
+
+    def test_discharge_summary_may_support_a_post_hospitalization_expense(self) -> None:
+        manifest = self._manifest()
+        self._row(manifest, "documents", "doc-discharge")["expense_ids"] = ["exp-post"]
+        manifest_path = self._write_manifest(manifest)
+
+        result = self._run("audit", manifest_path, "discharge-context")
+
+        self._assert_code(result, 0)
+
+    def test_audit_writes_a_deadline_calendar_without_personal_details(self) -> None:
+        manifest_path = self._write_manifest(self._manifest())
+
+        self._assert_code(self._run("audit", manifest_path, "calendar"), 0)
+
+        calendar = (self.case_root / "calendar" / "claim-deadlines.ics").read_bytes()
+        self.assertTrue(calendar.startswith(b"BEGIN:VCALENDAR\r\n"))
+        self.assertEqual(calendar.count(b"BEGIN:VEVENT"), 3)
+        self.assertEqual(calendar.count(b"TRIGGER:-P7D"), 3)
+        for expected in (b"DTSTART;VALUE=DATE:20990101", b"DTSTART;VALUE=DATE:20261031", b"DTSTART;VALUE=DATE:20990201"):
+            self.assertIn(expected, calendar)
+        for private in (b"Synthetic Patient", b"Synthetic insurer", b"180.00", b"synthetic-claim-001"):
+            self.assertNotIn(private, calendar)
+        markdown = (self.case_root / "calendar" / "claim-audit.md").read_text(encoding="utf-8")
+        self.assertIn("2026-10-31: post-hospitalization cover ends", markdown)
+
+    def test_no_calendar_is_written_without_any_dates(self) -> None:
+        manifest = self._manifest()
+        manifest["verification"]["filing_deadlines"]["hospitalization_and_pre_due"] = ""  # type: ignore[index]
+        manifest["verification"]["filing_deadlines"]["post_due"] = ""  # type: ignore[index]
+        manifest["verification"]["coverage_window"]["post_end"] = ""  # type: ignore[index]
+        manifest_path = self._write_manifest(manifest)
+
+        self._run("audit", manifest_path, "no-calendar")
+
+        self.assertFalse((self.case_root / "no-calendar" / "claim-deadlines.ics").exists())
+
+    def _phone_photo_manifest(self) -> tuple[Path, bytes]:
+        """Replace the PNG report with a noisy, EXIF-rotated phone photo."""
+        photo = Image.effect_noise((1200, 900), 40).convert("RGB")
+        ImageDraw.Draw(photo).rectangle((0, 0, 300, 225), fill="red")
+        exif = Image.Exif()
+        exif[0x0112] = 6  # stored sideways; viewers rotate it 90 degrees clockwise
+        exif[0x010E] = "SYNTHETIC-PRIVATE-METADATA"
+        photo_path = self.sources / "pre-result.jpg"
+        photo.save(photo_path, "JPEG", quality=85, exif=exif.tobytes())
+        manifest = self._manifest()
+        (self.sources / "pre-result.png").unlink()
+        result = next(
+            document
+            for document in manifest["documents"]  # type: ignore[index]
+            if document["id"] == "doc-pre-result"
+        )
+        result["path"] = "sources/pre-result.jpg"
+        result["expected_sha256"] = self._sha256(photo_path)
+        return self._write_manifest(manifest), photo_path.read_bytes()
+
+    def test_phone_photo_is_embedded_unchanged_without_metadata(self) -> None:
+        manifest_path, source_bytes = self._phone_photo_manifest()
+
+        result = self._run("build", manifest_path, "phone-photo")
+
+        self._assert_code(result, 0)
+        pack = self.case_root / "phone-photo" / "SUBMIT" / "03-pre.pdf"
+        self.assertNotIn(b"SYNTHETIC-PRIVATE-METADATA", pack.read_bytes())
+        page = PdfReader(str(pack), strict=False).pages[1]
+        images = [
+            reference.get_object()
+            for reference in page["/Resources"]["/XObject"].values()
+        ]
+        self.assertEqual(len(images), 1)
+        self.assertEqual(list(images[0]["/Filter"]), ["/DCTDecode"])
+        embedded = images[0]._data
+        start_of_scan = b"\xff\xda"
+        self.assertEqual(
+            embedded[embedded.index(start_of_scan):],
+            source_bytes[source_bytes.index(start_of_scan):],
+        )
+        self.assertLess(len(embedded), len(source_bytes))
+
+    @unittest.skipUnless(shutil.which("pdftoppm"), "Poppler is not installed")
+    def test_rotated_phone_photo_renders_upright(self) -> None:
+        manifest_path, _ = self._phone_photo_manifest()
+        self._assert_code(self._run("build", manifest_path, "phone-rotation"), 0)
+        pack = self.case_root / "phone-rotation" / "SUBMIT" / "03-pre.pdf"
+        render_prefix = self.case_root / "phone-rotation-page"
+
+        subprocess.run(
+            ["pdftoppm", "-png", "-r", "20", "-f", "2", "-l", "2", "-singlefile",
+             str(pack), str(render_prefix)],
+            check=True,
+        )
+
+        with Image.open(f"{render_prefix}.png") as rendered:
+            page = rendered.convert("RGB")
+        width, height = page.size
+        red_pixels = [
+            (x, y)
+            for x in range(width)
+            for y in range(height)
+            if page.getpixel((x, y))[0] > 200 and max(page.getpixel((x, y))[1:]) < 80
+        ]
+        self.assertTrue(red_pixels)
+        # Orientation 6 moves the stored top-left corner to the displayed top-right.
+        self.assertGreater(min(x for x, _ in red_pixels), width / 2)
+        self.assertLess(max(y for _, y in red_pixels), height / 2)
+
+    def test_unsupported_input_file_is_reported_not_silently_skipped(self) -> None:
+        (self.sources / "pharmacy-bill.heic").write_bytes(b"synthetic HEIC placeholder")
+        (self.sources / ".DS_Store").write_bytes(b"finder metadata")
+        manifest_path = self._write_manifest(self._manifest())
+
+        result = self._run("build", manifest_path, "unsupported-input")
+
+        self._assert_code(result, 0)
+        output = self.case_root / "unsupported-input"
+        self.assertEqual(list((output / "SUBMIT").iterdir()), [])
+        unsupported = [
+            item["message"]
+            for item in self._report("unsupported-input")["warnings"]  # type: ignore[index]
+            if item["code"] == "UNSUPPORTED_SOURCE_FILE"
+        ]
+        self.assertEqual(len(unsupported), 1)
+        self.assertIn("pharmacy-bill.heic", unsupported[0])
+
     def test_build_subdirectory_path_types_are_reported_without_traceback(self) -> None:
         manifest_path = self._write_manifest(self._manifest())
         for name in ("REVIEW_ONLY", "SUBMIT", "CANDIDATE_UPLOADS"):
@@ -1167,6 +1441,38 @@ class ClaimPacketCliTests(unittest.TestCase):
         self.assertIn("Partial or excluded amounts", master_text)
         self.assertIn("Synthetic excluded line", master_text)
         self.assertIn("hospital-bill.pdf p.1", master_text)
+
+    def test_cover_text_is_split_into_script_runs_by_word(self) -> None:
+        module = load_claim_packet()
+
+        self.assertEqual(
+            module.font_runs("Ram (रोगी) 45 ராம்"),
+            ([("Ram ", None), ("(रोगी)", "devanagari"), (" 45 ", None), ("ராம்", "tamil")], False),
+        )
+        self.assertEqual(
+            module.font_runs("Ramरोगी"), ([("Ram", None), ("रोगी", "devanagari")], True)
+        )
+
+    def test_regional_script_name_builds_and_keeps_submit_files_clean(self) -> None:
+        manifest = self._manifest()
+        manifest["case"]["patient_name"] = "Synthetic रोगी"  # type: ignore[index]
+        manifest_path = self._write_manifest(manifest)
+
+        result = self._run("build", manifest_path, "regional-name")
+
+        self._assert_code(result, 0)
+        output = self.case_root / "regional-name"
+        warnings = {item["code"] for item in self._report("regional-name")["warnings"]}  # type: ignore[index]
+        self.assertLessEqual(
+            warnings, {"VISUAL_QA_PENDING", "COVER_FONT_MISSING", "COVER_TEXT_UNSHAPED"}
+        )
+        master_fonts = pdf_font_names(next((output / "REVIEW_ONLY").glob("*.pdf")))
+        if "COVER_FONT_MISSING" not in warnings:
+            self.assertTrue(any(not name.startswith("/Helvetica") for name in master_fonts))
+        submit_files = sorted((output / "SUBMIT").glob("*.pdf"))
+        self.assertEqual(len(submit_files), 4)
+        for path in submit_files:
+            self.assertTrue(all(name.startswith("/Helvetica") for name in pdf_font_names(path)))
 
     def test_help_works_without_loading_optional_pdf_dependencies(self) -> None:
         result = subprocess.run(

@@ -21,4 +21,6 @@ python3 -m unittest discover -s tests -v
 codex-validate-skill .
 ```
 
+If you change `GUIDE.md`, run the scenarios in [tests/chat-scenarios.md](tests/chat-scenarios.md) in at least one AI chat and update its "Last run" line.
+
 Keep changes focused. Explain the user-visible problem, the official authority when applicable, and the verification performed. One maintainer can merge a change after the checks pass; no formal approval ceremony is required.

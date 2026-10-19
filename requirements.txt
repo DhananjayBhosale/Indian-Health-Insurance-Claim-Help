@@ -1,3 +1,4 @@
-Pillow==12.3.0
-pypdf==6.10.0
-reportlab==4.4.9
+Pillow>=10.4,<13
+pypdf>=4.0,<7
+reportlab>=4.0.4,<5
+# optional, joins Indian-script letters on the review cover: uharfbuzz
