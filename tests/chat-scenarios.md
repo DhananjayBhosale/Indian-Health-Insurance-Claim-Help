@@ -6,6 +6,8 @@ A run passes when every Expected line holds. Run all six after any change to GUI
 
 Last run: 2026-10-19, 6/6 with Claude Sonnet, files described in text rather than attached. The first pass was 5/6: scenario 1 switched to English after the user pasted English details, so GUIDE.md now keeps the starting language.
 
+Also run 2026-10-19 in the ChatGPT web app (temporary chat, files described in text): scenarios 1, 2, 3, and 6 passed. ChatGPT may show Step 1 as a fill-in form; typing the answers works too.
+
 ## Scenario 1 — Hindi speaker, pharmacy bill without a receipt
 
 ### User turns
