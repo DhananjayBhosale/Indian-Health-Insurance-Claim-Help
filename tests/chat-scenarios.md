@@ -4,9 +4,11 @@ Manual checks for [GUIDE.md](../GUIDE.md). Paste GUIDE.md into a new chat, then 
 
 A run passes when every Expected line holds. Run all six after any change to GUIDE.md and update the line below.
 
-Last run: 2026-10-19, 6/6 with Claude Sonnet, files described in text rather than attached. The first pass was 5/6: scenario 1 switched to English after the user pasted English details, so GUIDE.md now keeps the starting language.
+Last run: 2026-10-19, after the bill-total check was added, 5/6 with Claude Sonnet, files described in text rather than attached. Scenario 1 named one document in Hindi only, without the English in brackets. An earlier run passed 6/6.
 
 Also run 2026-10-19 in the ChatGPT web app (temporary chat, files described in text): scenarios 1, 2, 3, and 6 passed. ChatGPT may show Step 1 as a fill-in form; typing the answers works too.
+
+Full case, 2026-10-19: a synthetic gallbladder surgery claim with 12 attached images and six planted errors (discharge date differs from what the user typed; bill lines add to ₹1,000 less than the printed total; ₹10,000 paid with no receipt; protein powder not on any prescription; wrong surname on one bill; claim form total matches nothing). Claude Sonnet caught all six. ChatGPT caught the other five but said the bill added up; after GUIDE.md asked for the sum to be written out, a rerun of the hospital-bill turns caught it. Both said "Not ready yet".
 
 ## Scenario 1 — Hindi speaker, pharmacy bill without a receipt
 
@@ -81,7 +83,7 @@ Also run 2026-10-19 in the ChatGPT web app (temporary chat, files described in t
 - States the post-hospitalization end date (2026-07-31, counting from discharge) and asks the user to confirm the counting with the policy if unclear.
 - Flags PH-902 as outside the window and leaves ₹1,500 out of the claimed amount, with the reason.
 - Claims ₹800 for post-hospitalization.
-- Asks the user to put the window end and filing deadline in their phone calendar.
+- Says the window has already ended (PH-902 is dated after it) and asks the user to put the filing deadline in their phone calendar.
 
 ## Scenario 5 — iPhone HEIC photo
 
