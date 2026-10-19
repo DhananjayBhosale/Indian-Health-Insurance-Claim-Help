@@ -65,9 +65,10 @@ fi
 chmod 700 "$output_dir"
 
 pdf_metadata=$(pdfinfo "$input_pdf")
-pages=$(printf '%s\n' "$pdf_metadata" | awk -F: '$1 == "Pages" { sub(/^[[:space:]]+/, "", $2); print $2; exit }')
-page_size=$(printf '%s\n' "$pdf_metadata" | awk -F: '$1 == "Page size" { sub(/^[[:space:]]+/, "", $2); print $2; exit }')
-file_size=$(printf '%s\n' "$pdf_metadata" | awk -F: '$1 == "File size" { sub(/^[[:space:]]+/, "", $2); print $2; exit }')
+# awk reads all input: exiting early can kill printf with SIGPIPE, which pipefail treats as failure.
+pages=$(printf '%s\n' "$pdf_metadata" | awk -F: '$1 == "Pages" && !seen++ { sub(/^[[:space:]]+/, "", $2); print $2 }')
+page_size=$(printf '%s\n' "$pdf_metadata" | awk -F: '$1 == "Page size" && !seen++ { sub(/^[[:space:]]+/, "", $2); print $2 }')
+file_size=$(printf '%s\n' "$pdf_metadata" | awk -F: '$1 == "File size" && !seen++ { sub(/^[[:space:]]+/, "", $2); print $2 }')
 output_prefix="$output_dir/page"
 
 printf 'Pages: %s\n' "${pages:-unknown}"

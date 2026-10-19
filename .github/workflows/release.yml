@@ -1,0 +1,37 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  skill-zip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the claude.ai skill ZIP
+        run: |
+          mkdir dist
+          git archive --format=zip --prefix=indian-health-insurance-claim-help/ \
+            -o dist/indian-health-insurance-claim-help.zip HEAD \
+            SKILL.md GUIDE.md LICENSE requirements.txt agents assets references scripts
+          unzip -l dist/indian-health-insurance-claim-help.zip
+          unzip -l dist/indian-health-insurance-claim-help.zip | grep -q ' indian-health-insurance-claim-help/SKILL.md$'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: indian-health-insurance-claim-help
+          path: dist/indian-health-insurance-claim-help.zip
+      - name: Attach the ZIP to the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/indian-health-insurance-claim-help.zip --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/indian-health-insurance-claim-help.zip --title "$GITHUB_REF_NAME" --generate-notes
+          fi

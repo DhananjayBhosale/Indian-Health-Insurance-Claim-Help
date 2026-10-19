@@ -11,7 +11,7 @@ Check whether the current claim route requires:
 - claim intimation/registration reference;
 - covering letter or schedule of expenses when the current route requests one;
 - policy schedule, health card, or current coverage proof;
-- patient photo ID and policyholder/proposer KYC or CKYC;
+- patient photo ID and policyholder/proposer KYC or CKYC. Use the ID type the route asks for. If Aadhaar is used, offer a masked copy (first 8 digits hidden) unless the insurer specifically asks for the full number; ask before sending it. Entities must redact the first 8 digits in Aadhaar copies they keep, and a service must not be refused only because someone declines Aadhaar authentication but can establish identity another way (UIDAI Authentication and Offline Verification Regulations 2021, reg 5(3) and 14(mb));
 - PAN or other threshold-specific KYC;
 - NEFT form and personalized cancelled cheque, bank passbook first page, or accepted bank statement;
 - other-insurer settlement advice and certified copies when originals were submitted elsewhere;

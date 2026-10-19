@@ -8,7 +8,9 @@ edits, deletes, decrypts, signs, annotates, or compresses them.
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -32,13 +34,24 @@ try:
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import mm
     from reportlab.lib.utils import ImageReader
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.pdfgen import canvas
     from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from reportlab import rl_config
+
+    # ASCII85 text-encodes binary streams and makes every image 25% larger.
+    rl_config.useA85 = 0
 except ModuleNotFoundError as exc:
     DEPENDENCY_ERROR = exc
 
 
 SUPPORTED_SUFFIXES = {".pdf", ".jpg", ".jpeg", ".png", ".tif", ".tiff"}
+# EXIF orientations that are pure rotations, so a JPEG can be embedded unchanged.
+JPEG_ROTATIONS = {1: 0, 3: 180, 6: 270, 8: 90}
+# JPEG segments to keep when embedding: APP0 (JFIF) and APP14 (Adobe colour
+# transform). Other APPn and COM segments carry camera, GPS, and editing metadata.
+JPEG_KEPT_APP_MARKERS = {0xE0, 0xEE}
 DOCUMENT_PHASES = {"administrative", "pre", "hospitalization", "post", "other"}
 EXPENSE_PHASES = {"pre", "hospitalization", "post", "other"}
 EXPENSE_KINDS = {
@@ -81,6 +94,18 @@ DEFAULT_EXPENSE_ROLES = {
     "ambulance": {"invoice", "payment_proof"},
 }
 EVIDENCE_ROLE_LABELS = {
+    "claim_form": "signed claim form",
+    "identity": "patient photo ID or KYC",
+    "bank": "cancelled cheque or bank proof",
+    "policy": "policy schedule or health card",
+    "hospital_form": "hospital-completed claim form part",
+    "hospital_registration": "hospital registration certificate",
+    "discharge": "discharge summary",
+    "accident_record": "accident record (MLC or FIR)",
+    "death_record": "death summary or certificate",
+    "claimant_authority": "nominee or legal-heir authority",
+    "other_insurer_settlement": "other insurer's settlement letter",
+    "maternity_record": "maternity record",
     "clinical_advice": "doctor advice, prescription, or referral",
     "clinical_record": "clinical or treatment record",
     "clinical_result": "complete diagnostic report or result",
@@ -99,6 +124,62 @@ CONDITION_ROLES = {
     "maternity": {"maternity_record"},
 }
 CANONICAL_CONDITIONS = (*CONDITION_ROLES.keys(), "ambulance_claimed")
+# Blockers that `build --draft` tolerates: missing documents and unconfirmed facts.
+# Problems with source files, page selection, or outputs still stop a draft.
+MISSING_DOCUMENT_BLOCKERS = {
+    "CONDITIONAL_EVIDENCE",
+    "DISCHARGE_REQUIRED",
+    "MISSING_CASE_EVIDENCE",
+    "MISSING_EXPENSE_EVIDENCE",
+}
+UNCONFIRMED_FACT_BLOCKERS = {
+    "ADVICE_AFTER_BILL",
+    "CASE_IDENTITY",
+    "CONDITION_UNVERIFIED",
+    "EXPENSE_DETAIL",
+    "FILING_DEADLINE_UNVERIFIED",
+    "MAIN_CLAIM_REFERENCE",
+    "OUTSIDE_CONFIGURED_WINDOW",
+    "POLICY_WINDOW_UNVERIFIED",
+    "VERIFICATION_DATE",
+}
+# Indian scripts for names and descriptions on the review cover:
+# (key, first code point, last code point, Noto font name, macOS font name).
+INDIC_SCRIPTS = (
+    ("devanagari", 0x0900, 0x097F, "Devanagari", "Devanagari"),
+    ("bengali", 0x0980, 0x09FF, "Bengali", "Bangla"),
+    ("gurmukhi", 0x0A00, 0x0A7F, "Gurmukhi", "Gurmukhi"),
+    ("gujarati", 0x0A80, 0x0AFF, "Gujarati", "Gujarati"),
+    ("oriya", 0x0B00, 0x0B7F, "Oriya", "Oriya"),
+    ("tamil", 0x0B80, 0x0BFF, "Tamil", "Tamil"),
+    ("telugu", 0x0C00, 0x0C7F, "Telugu", "Telugu"),
+    ("kannada", 0x0C80, 0x0CFF, "Kannada", "Kannada"),
+    ("malayalam", 0x0D00, 0x0D7F, "Malayalam", "Malayalam"),
+)
+# Installed fonts only; nothing is downloaded or bundled.
+COVER_FONT_DIRS = (
+    "/usr/share/fonts/truetype/noto",
+    "/usr/share/fonts/opentype/noto",
+    "/usr/share/fonts/noto",
+    "/System/Library/Fonts/Supplemental",
+    "/Library/Fonts",
+    "C:/Windows/Fonts",
+)
+SCRIPT_JOINERS = {"\u200c", "\u200d"}
+# A document carrying these roles belongs to the phase of the expense it proves.
+# Context records (advice, discharge, operation notes) may support any phase.
+PHASE_BOUND_ROLES = {"invoice", "payment_proof", "clinical_result"}
+DRAFT_ALLOWED_BLOCKERS = {
+    *MISSING_DOCUMENT_BLOCKERS,
+    *UNCONFIRMED_FACT_BLOCKERS,
+    "CLAIM_TOTAL_MISMATCH",
+    "CONDITION_LEDGER_CONFLICT",
+    "DUPLICATE_FINANCIAL_EVENT",
+    "PARTIAL_CLAIM_REASON",
+    "PORTAL_FILE_COUNT",
+    "UNACCOUNTED_SOURCE_PAGES",
+    "UNMANIFESTED_SOURCE_FILE",
+}
 SUPPORTED_CLAIM_TYPES = {"hospitalization_reimbursement", "day_care_reimbursement"}
 
 
@@ -134,6 +215,15 @@ def parse_args() -> argparse.Namespace:
         sub = subparsers.add_parser(command)
         sub.add_argument("--manifest", required=True, type=Path)
         sub.add_argument("--output-dir", required=True, type=Path)
+        if command == "build":
+            sub.add_argument(
+                "--draft",
+                action="store_true",
+                help=(
+                    "while documents or facts are still missing, write only a "
+                    "REVIEW_ONLY draft packet listing what is needed; never upload files"
+                ),
+            )
     return parser.parse_args()
 
 
@@ -257,7 +347,11 @@ def inspect_source(path: Path) -> SourceInfo:
     if suffix == ".pdf":
         reader = PdfReader(str(path), strict=False)
         if reader.is_encrypted:
-            raise ValueError("encrypted/password-protected PDF; do not decrypt automatically")
+            raise ValueError(
+                "encrypted/password-protected PDF; do not decrypt automatically. "
+                "Ask the claimant to open it with its password and save an unlocked "
+                "copy, and keep the locked original"
+            )
         page_count = len(reader.pages)
         if page_count < 1:
             raise ValueError("PDF contains no pages")
@@ -651,6 +745,23 @@ def audit_manifest(
         except ValueError as exc:
             deadline_dates[key] = None
             issue(report, "blocker", "FILING_DATE", str(exc))
+    report["key_dates"] = [
+        {"key": key, "label": label, "date": value.isoformat()}
+        for key, label, value in (
+            (
+                "hospitalization_and_pre_due",
+                "last day to file the hospital and pre-hospitalization claim",
+                deadline_dates.get("hospitalization_and_pre_due"),
+            ),
+            ("post_end", "post-hospitalization cover ends", coverage_dates.get("post_end")),
+            (
+                "post_due",
+                "last day to file the post-hospitalization claim",
+                deadline_dates.get("post_due"),
+            ),
+        )
+        if value
+    ]
 
     pack_definitions = rules.get("pack_definitions")
     if not isinstance(pack_definitions, list):
@@ -681,6 +792,7 @@ def audit_manifest(
 
     expense_map: dict[str, dict[str, Any]] = {}
     expense_amounts: dict[str, tuple[Decimal, Decimal]] = {}
+    expense_dates: dict[str, date] = {}
     duplicate_events: dict[tuple[str, str, str, str], tuple[str, str]] = {}
     total_claimed = Decimal("0.00")
     phases_total: dict[str, Decimal] = defaultdict(lambda: Decimal("0.00"))
@@ -749,14 +861,21 @@ def audit_manifest(
         except ValueError as exc:
             expense_date = None
             issue(report, "blocker", "EXPENSE_DATE", str(exc), expense_id=expense_id)
-        if phase == "pre" and expense_date:
-            start, end = coverage_dates.get("pre_start"), coverage_dates.get("pre_end")
+        if expense_date:
+            expense_dates[expense_id] = expense_date
+        if phase in ("pre", "post") and expense_date:
+            start, end = coverage_dates.get(f"{phase}_start"), coverage_dates.get(f"{phase}_end")
             if start and end and not (start <= expense_date <= end):
-                issue(report, "warning", "OUTSIDE_CONFIGURED_WINDOW", "pre expense date is outside the configured policy window", expense_id=expense_id)
-        if phase == "post" and expense_date:
-            start, end = coverage_dates.get("post_start"), coverage_dates.get("post_end")
-            if start and end and not (start <= expense_date <= end):
-                issue(report, "warning", "OUTSIDE_CONFIGURED_WINDOW", "post expense date is outside the configured policy window", expense_id=expense_id)
+                # Out-of-window lines may stay in the ledger for disclosure if nothing is claimed.
+                issue(
+                    report,
+                    "blocker" if claimed > 0 else "warning",
+                    "OUTSIDE_CONFIGURED_WINDOW",
+                    f"{phase} expense {expense.get('description', expense_id)} dated {expense_date} "
+                    f"is outside the policy window {start} to {end}; correct the window "
+                    "or do not claim this amount",
+                    expense_id=expense_id,
+                )
         event_key = (
             str(expense.get("issuer", "")).strip().casefold(),
             str(expense.get("invoice_number", "")).strip().casefold(),
@@ -1100,7 +1219,23 @@ def audit_manifest(
                     "source roots must contain copies, not symbolic links",
                 )
                 continue
-            if not candidate.is_file() or candidate.suffix.lower() not in SUPPORTED_SUFFIXES:
+            if not candidate.is_file():
+                continue
+            if candidate.suffix.lower() not in SUPPORTED_SUFFIXES:
+                if candidate.name.startswith("."):
+                    continue
+                try:
+                    display_path = str(candidate.relative_to(manifest_root))
+                except ValueError:
+                    display_path = candidate.name
+                issue(
+                    report,
+                    "warning",
+                    "UNSUPPORTED_SOURCE_FILE",
+                    f"file type cannot be packed and is not in the claim: {display_path}. "
+                    "Ask for a PDF, JPG, or PNG copy (for example an iPhone HEIC photo "
+                    "or a WEBP/DOCX file), or move the file out of the source folder",
+                )
                 continue
             resolved_candidate = candidate.resolve()
             if resolved_candidate not in manifested_paths:
@@ -1160,8 +1295,52 @@ def audit_manifest(
     for selection in included_selections:
         roles = set(selection.document.get("evidence_roles") or [])
         all_included_roles |= roles
+        document_id = str(selection.document.get("id", ""))
+        document_phase = str(selection.document.get("phase", ""))
+        try:
+            document_date = iso_date(selection.document.get("date"), "document date")
+        except ValueError:
+            document_date = None  # already reported as DOCUMENT_DATE
         for expense_id in selection.document.get("expense_ids") or []:
             linked_expense_id = str(expense_id)
+            expense = expense_map.get(linked_expense_id, {})
+            expense_date = expense_dates.get(linked_expense_id)
+            if "clinical_advice" in roles and expense_date:
+                if document_date is None:
+                    issue(
+                        report,
+                        "warning",
+                        "ADVICE_DATE_UNKNOWN",
+                        f"advice {document_id} has no date; cannot confirm it precedes the bill",
+                        document_id=document_id,
+                        expense_id=linked_expense_id,
+                    )
+                elif document_date > expense_date:
+                    issue(
+                        report,
+                        "blocker",
+                        "ADVICE_AFTER_BILL",
+                        f"advice {document_id} is dated {document_date}, after the bill for "
+                        f"{expense.get('description', linked_expense_id)} dated {expense_date}; "
+                        "find the prescription or advice given before the service",
+                        document_id=document_id,
+                        expense_id=linked_expense_id,
+                    )
+            if (
+                roles & PHASE_BOUND_ROLES
+                and document_phase in EXPENSE_PHASES
+                and expense
+                and document_phase != expense.get("phase")
+            ):
+                issue(
+                    report,
+                    "blocker",
+                    "PHASE_MISMATCH",
+                    f"document phase {document_phase} differs from expense phase "
+                    f"{expense.get('phase')}; a bill, receipt, or report belongs to one phase",
+                    document_id=document_id,
+                    expense_id=linked_expense_id,
+                )
             roles_by_expense[linked_expense_id] |= roles
             evidence_by_expense[linked_expense_id].append(
                 {
@@ -1186,7 +1365,22 @@ def audit_manifest(
                 required = set()
                 issue(report, "blocker", "EXPENSE_REQUIRED_ROLES", str(exc), expense_id=expense_id)
             if not required:
-                issue(report, "warning", "EXPENSE_REQUIRED_ROLES", "other expense has no required_roles", expense_id=expense_id)
+                issue(
+                    report,
+                    "blocker",
+                    "EXPENSE_REQUIRED_ROLES",
+                    "other expense needs required_roles naming its evidence",
+                    expense_id=expense_id,
+                )
+            unknown_roles = sorted(required - EVIDENCE_ROLES)
+            if unknown_roles:
+                issue(
+                    report,
+                    "blocker",
+                    "EXPENSE_REQUIRED_ROLES",
+                    f"unknown required roles: {', '.join(unknown_roles)}",
+                    expense_id=expense_id,
+                )
         else:
             required = DEFAULT_EXPENSE_ROLES.get(kind, set())
         missing = sorted(required - roles_by_expense.get(expense_id, set()))
@@ -1245,7 +1439,13 @@ def audit_manifest(
         issue(report, "blocker", "REQUIRED_CASE_ROLES", f"unknown required roles: {', '.join(unknown_required)}")
     missing_case_roles = sorted(required_case_roles - all_included_roles)
     if missing_case_roles:
-        issue(report, "blocker", "MISSING_CASE_EVIDENCE", f"missing required case roles: {', '.join(missing_case_roles)}")
+        issue(
+            report,
+            "blocker",
+            "MISSING_CASE_EVIDENCE",
+            "missing required case evidence: "
+            + ", ".join(evidence_role_label(role) for role in missing_case_roles),
+        )
 
     for condition, required in CONDITION_ROLES.items():
         if conditions.get(condition) is True:
@@ -1255,7 +1455,8 @@ def audit_manifest(
                     report,
                     "blocker",
                     "CONDITIONAL_EVIDENCE",
-                    f"{condition} is true; missing evidence roles: {', '.join(missing)}",
+                    f"{condition.replace('_', ' ')} applies; missing evidence: "
+                    + ", ".join(evidence_role_label(role) for role in missing),
                 )
     if conditions.get("implant") is True and not (
         all_included_roles & {"clinical_record", "operation_record"}
@@ -1358,6 +1559,26 @@ def expense_match_reference(expense: dict[str, Any]) -> str:
     return "; ".join(details)
 
 
+def still_needed(report: dict[str, Any]) -> list[tuple[str, list[str]]]:
+    """Group blocker messages under plain headings for the claimant."""
+    groups = (
+        ("Documents to send", MISSING_DOCUMENT_BLOCKERS),
+        ("Facts to confirm", UNCONFIRMED_FACT_BLOCKERS),
+        ("Other problems to fix", None),
+    )
+    grouped = MISSING_DOCUMENT_BLOCKERS | UNCONFIRMED_FACT_BLOCKERS
+    sections: list[tuple[str, list[str]]] = []
+    for heading, codes in groups:
+        messages = [
+            str(item["message"])
+            for item in report["blockers"]
+            if (item["code"] in codes if codes is not None else item["code"] not in grouped)
+        ]
+        if messages:
+            sections.append((heading, messages))
+    return sections
+
+
 def report_markdown(report: dict[str, Any]) -> str:
     lines = [
         "# Claim packet audit",
@@ -1367,9 +1588,12 @@ def report_markdown(report: dict[str, Any]) -> str:
         f"- Blockers: {len(report['blockers'])}",
         f"- Warnings: {len(report['warnings'])}",
         "",
-        "## Blockers",
-        "",
     ]
+    if report["blockers"]:
+        lines.extend(["## Still needed before upload", ""])
+        for heading, messages in still_needed(report):
+            lines.extend([f"### {heading}", "", *(f"- {message}" for message in messages), ""])
+    lines.extend(["## Blockers", ""])
     if report["blockers"]:
         for item in report["blockers"]:
             reference = item.get("document_id") or item.get("expense_id")
@@ -1385,6 +1609,12 @@ def report_markdown(report: dict[str, Any]) -> str:
             lines.append(f"- `{item['code']}`{suffix}: {item['message']}")
     else:
         lines.append("- None.")
+
+    if report.get("key_dates"):
+        lines.extend(["", "## Dates for your calendar", ""])
+        lines.extend(f"- {item['date']}: {item['label']}" for item in report["key_dates"])
+        if report.get("calendar_file"):
+            lines.append(f"- Calendar file with 7-day reminders: `{Path(report['calendar_file']).name}`")
 
     portal_rules = report.get("portal_rules", {})
     per_file_limit = (
@@ -1525,6 +1755,51 @@ def write_reports(
     return json_path, md_path
 
 
+def calendar_ics(report: dict[str, Any], stamp: date) -> str:
+    """All-day reminders with a 7-day alarm; no names, insurer, or amounts."""
+    case_key = hashlib.sha256(str(report.get("case_id", "")).encode("utf-8")).hexdigest()[:12]
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//health-claim-deadlines//EN",
+        "CALSCALE:GREGORIAN",
+    ]
+    for item in report.get("key_dates", []):
+        day = date.fromisoformat(item["date"])
+        next_day = date.fromordinal(day.toordinal() + 1)
+        summary = f"Health claim: {item['label']}"
+        lines.extend(
+            [
+                "BEGIN:VEVENT",
+                f"UID:{item['key']}-{case_key}@health-claim",
+                f"DTSTAMP:{stamp:%Y%m%d}T000000Z",
+                f"DTSTART;VALUE=DATE:{day:%Y%m%d}",
+                f"DTEND;VALUE=DATE:{next_day:%Y%m%d}",
+                f"SUMMARY:{summary}",
+                "BEGIN:VALARM",
+                "ACTION:DISPLAY",
+                f"DESCRIPTION:{summary}",
+                "TRIGGER:-P7D",
+                "END:VALARM",
+                "END:VEVENT",
+            ]
+        )
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines) + "\r\n"
+
+
+def write_calendar(output_dir: Path, report: dict[str, Any], manifest: dict[str, Any]) -> None:
+    if not report.get("key_dates"):
+        return
+    try:
+        stamp = iso_date(manifest.get("verification", {}).get("checked_on"), "checked_on")
+    except (AttributeError, ValueError):
+        stamp = None
+    path = output_dir / "claim-deadlines.ics"
+    secure_replace(path, calendar_ics(report, stamp or date.today()).encode("utf-8"))
+    report["calendar_file"] = str(path)
+
+
 def slugify(value: str, fallback: str = "packet") -> str:
     text = re.sub(r"[^A-Za-z0-9]+", "-", value.strip()).strip("-").lower()
     return text or fallback
@@ -1538,8 +1813,123 @@ def money(value: Any, currency: str = "INR") -> str:
         return f"{currency} 0.00"
 
 
+def script_of(character: str) -> str | None:
+    point = ord(character)
+    for key, first, last, _noto, _mac in INDIC_SCRIPTS:
+        if first <= point <= last:
+            return key
+    return None
+
+
+def font_runs(text: str) -> tuple[list[tuple[str, str | None]], bool]:
+    """Split text into runs of one Indian script (None for other text).
+
+    Each word gets one font, so punctuation and digits follow the word's script.
+    Returns True as the second value when a word mixes Latin and Indian letters;
+    such a word is split by character and cannot be shaped.
+    """
+    pieces: list[tuple[str, str | None]] = []
+    mixed = False
+    for token in re.findall(r"\s+|\S+", text):
+        scripts = {script for character in token if (script := script_of(character))}
+        has_latin_letters = any(
+            character.isalpha() and script_of(character) is None for character in token
+        )
+        if not scripts:
+            pieces.append((token, None))
+        elif len(scripts) == 1 and not has_latin_letters:
+            pieces.append((token, scripts.pop()))
+        else:
+            mixed = True
+            for character in token:
+                script = script_of(character)
+                if script is None and character in SCRIPT_JOINERS and pieces:
+                    script = pieces[-1][1]
+                pieces.append((character, script))
+    runs: list[tuple[str, str | None]] = []
+    for piece, script in pieces:
+        if runs and runs[-1][1] == script:
+            runs[-1] = (runs[-1][0] + piece, script)
+        else:
+            runs.append((piece, script))
+    return runs, mixed
+
+
+@functools.cache
+def can_shape_text() -> bool:
+    try:
+        import uharfbuzz  # noqa: F401
+    except ImportError:
+        return False
+    return (
+        "shaping" in ParagraphStyle.defaults
+        and "shapable" in inspect.signature(TTFont).parameters
+    )
+
+
+@functools.cache
+def cover_font(script: str) -> str | None:
+    """Register an installed font for an Indian script, or return None."""
+    _key, _first, _last, noto, mac = next(item for item in INDIC_SCRIPTS if item[0] == script)
+    file_names = (
+        f"NotoSans{noto}-Regular.ttf",
+        f"NotoSans{noto}.ttc",
+        f"{mac} Sangam MN.ttc",
+        f"{mac} MN.ttc",
+        "Nirmala.ttf",
+        "Nirmala.ttc",
+    )
+    font_name = f"ClaimCover-{script}"
+    options = {"shapable": True} if can_shape_text() else {}
+    for directory in (os.environ.get("CLAIM_COVER_FONT_DIR", ""), *COVER_FONT_DIRS):
+        for file_name in file_names if directory else ():
+            font_path = Path(directory) / file_name
+            if not font_path.is_file():
+                continue
+            try:
+                pdfmetrics.registerFont(TTFont(font_name, str(font_path), subfontIndex=0, **options))
+            except Exception:
+                continue
+            return font_name
+    return None
+
+
+# Scripts the current review cover could not display well:
+# script -> "missing", "mixed" or "unshaped".
+cover_font_problems: dict[str, str] = {}
+
+
 def styled_paragraph(text: Any, style: ParagraphStyle) -> Paragraph:
-    return Paragraph(escape(str(text)), style)
+    runs, mixed = font_runs(str(text))
+    scripts = list(dict.fromkeys(script for _run, script in runs if script))
+    if not scripts:
+        return Paragraph(escape(str(text)), style)
+    fonts = {script: cover_font(script) for script in scripts}
+    shaping = can_shape_text() and not mixed
+    for script in scripts:
+        if not fonts[script]:
+            cover_font_problems[script] = "missing"
+        elif mixed:
+            cover_font_problems.setdefault(script, "mixed")
+        elif not shaping:
+            cover_font_problems.setdefault(script, "unshaped")
+    base_script = next((script for script in scripts if fonts[script]), None)
+    if base_script is None:
+        return Paragraph(escape(str(text)), style)
+    # Shaping follows the paragraph's base font, so an Indian-script font is the base
+    # and other text keeps the original font.
+    markup = "".join(
+        escape(run)
+        if script == base_script
+        else f'<font name="{fonts.get(script) or style.fontName}">{escape(run)}</font>'
+        for run, script in runs
+    )
+    script_style = ParagraphStyle(
+        f"{style.name}-{base_script}", parent=style, fontName=fonts[base_script]
+    )
+    if shaping:
+        script_style.shaping = 1
+    return Paragraph(markup, script_style)
 
 
 def invariant_canvas(*args: Any, **kwargs: Any) -> canvas.Canvas:
@@ -1555,6 +1945,7 @@ def make_cover_pdf(
 ) -> bytes:
     case = manifest.get("case", {})
     currency = str(case.get("currency", "INR"))
+    cover_font_problems.clear()
     styles = getSampleStyleSheet()
     title = ParagraphStyle(
         "ClaimTitle",
@@ -1594,7 +1985,6 @@ def make_cover_pdf(
         topMargin=12 * mm,
         bottomMargin=12 * mm,
         title=f"Claim review {case.get('case_id', '')}",
-        author="Indian Health Insurance Claim Help skill",
     )
     story: list[Any] = [
         styled_paragraph("Health reimbursement claim - review packet", title),
@@ -1604,6 +1994,12 @@ def make_cover_pdf(
         ),
         Spacer(1, 5),
     ]
+    if report.get("blockers"):
+        story.append(styled_paragraph("DRAFT - NOT READY TO UPLOAD", title))
+        for group_heading, messages in still_needed(report):
+            story.append(styled_paragraph(group_heading, heading))
+            story.extend(styled_paragraph(f"- {message}", body) for message in messages)
+        story.append(Spacer(1, 5))
     details = [
         ["Case ID", case.get("case_id", "")],
         ["Insurer", case.get("insurer", "")],
@@ -1786,6 +2182,31 @@ def make_cover_pdf(
         ]
     )
     doc_template.build(story, canvasmaker=invariant_canvas)
+    for script, problem in sorted(cover_font_problems.items()):
+        if problem == "missing":
+            issue_once(
+                report,
+                "warning",
+                "COVER_FONT_MISSING",
+                f"the review cover cannot display {script} text; evidence pages are unaffected. "
+                "Install Noto fonts or set CLAIM_COVER_FONT_DIR to a folder that has one",
+            )
+        elif problem == "mixed":
+            issue_once(
+                report,
+                "warning",
+                "COVER_TEXT_UNSHAPED",
+                f"a word on the review cover mixes English and {script} letters, so they may not "
+                "join correctly; evidence pages are unaffected. Put a space between them in the manifest",
+            )
+        else:
+            issue_once(
+                report,
+                "warning",
+                "COVER_TEXT_UNSHAPED",
+                f"{script} letters on the review cover may not join correctly; evidence pages "
+                "are unaffected. Run: python3 -m pip install uharfbuzz",
+            )
     return buffer.getvalue()
 
 
@@ -1804,6 +2225,52 @@ def default_table_style() -> TableStyle:
     )
 
 
+def jpeg_without_metadata(data: bytes) -> bytes | None:
+    """Drop metadata segments before the first scan; the image data stays byte-for-byte."""
+    if data[:2] != b"\xff\xd8":
+        return None
+    kept = bytearray(data[:2])
+    offset = 2
+    while offset + 4 <= len(data):
+        if data[offset] != 0xFF:
+            return None
+        marker = data[offset + 1]
+        if marker == 0xFF:
+            offset += 1
+            continue
+        if marker == 0xDA:
+            return bytes(kept + data[offset:])
+        end = offset + 2 + int.from_bytes(data[offset + 2 : offset + 4], "big")
+        if end <= offset + 3 or end > len(data):
+            return None
+        is_metadata = marker == 0xFE or (
+            0xE0 <= marker <= 0xEF and marker not in JPEG_KEPT_APP_MARKERS
+        )
+        if not is_metadata:
+            kept += data[offset:end]
+        offset = end
+    return None
+
+
+def jpeg_passthrough(source: Any, path: Path) -> tuple[bytes, int] | None:
+    """Return embeddable JPEG bytes and a rotation, or None to re-encode the image.
+
+    Re-encoding a phone photo as lossless PDF image data makes it several times
+    larger, which breaks common 5 MB portal limits.
+    """
+    if (
+        source.format != "JPEG"
+        or getattr(source, "n_frames", 1) != 1
+        or source.mode not in ("RGB", "L")
+    ):
+        return None
+    rotation = JPEG_ROTATIONS.get(source.getexif().get(0x0112, 1))
+    payload = jpeg_without_metadata(path.read_bytes())
+    if rotation is None or payload is None:
+        return None
+    return payload, rotation
+
+
 def image_selection_pdf(selection: Selection) -> bytes:
     packet = BytesIO()
     pdf_canvas = canvas.Canvas(packet, pagesize=A4, invariant=1)
@@ -1812,32 +2279,47 @@ def image_selection_pdf(selection: Selection) -> bytes:
     max_width = page_width - 2 * margin
     max_height = page_height - 2 * margin
     with Image.open(selection.source.path) as source:
+        passthrough = jpeg_passthrough(source, selection.source.path)
         for frame_index in selection.pages:
-            source.seek(frame_index)
-            frame = ImageOps.exif_transpose(source.copy())
-            if frame.mode in ("RGBA", "LA") or (frame.mode == "P" and "transparency" in frame.info):
-                rgba = frame.convert("RGBA")
-                background = Image.new("RGB", rgba.size, "white")
-                background.paste(rgba, mask=rgba.getchannel("A"))
-                frame = background
-            elif frame.mode != "RGB":
-                frame = frame.convert("RGB")
-            width, height = frame.size
+            if passthrough:
+                payload, rotation = passthrough
+                image = ImageReader(BytesIO(payload))
+                width, height = source.size
+                if rotation in (90, 270):
+                    width, height = height, width
+            else:
+                rotation = 0
+                source.seek(frame_index)
+                frame = ImageOps.exif_transpose(source.copy())
+                if frame.mode in ("RGBA", "LA") or (frame.mode == "P" and "transparency" in frame.info):
+                    rgba = frame.convert("RGBA")
+                    background = Image.new("RGB", rgba.size, "white")
+                    background.paste(rgba, mask=rgba.getchannel("A"))
+                    frame = background
+                elif frame.mode != "RGB":
+                    frame = frame.convert("RGB")
+                image = ImageReader(frame)
+                width, height = frame.size
             scale = min(max_width / width, max_height / height, 1.0)
             draw_width, draw_height = width * scale, height * scale
             x = (page_width - draw_width) / 2
             y = (page_height - draw_height) / 2
             pdf_canvas.setFillColor(colors.white)
             pdf_canvas.rect(0, 0, page_width, page_height, fill=1, stroke=0)
-            pdf_canvas.drawImage(
-                ImageReader(frame),
-                x,
-                y,
-                width=draw_width,
-                height=draw_height,
-                preserveAspectRatio=True,
-                mask="auto",
-            )
+            # Rotate around the placement box so EXIF-rotated photos appear upright.
+            origin = {
+                0: (x, y),
+                90: (x + draw_width, y),
+                180: (x + draw_width, y + draw_height),
+                270: (x, y + draw_height),
+            }[rotation]
+            pdf_canvas.saveState()
+            pdf_canvas.translate(*origin)
+            pdf_canvas.rotate(rotation)
+            if rotation in (90, 270):
+                draw_width, draw_height = draw_height, draw_width
+            pdf_canvas.drawImage(image, 0, 0, width=draw_width, height=draw_height, mask="auto")
+            pdf_canvas.restoreState()
             pdf_canvas.showPage()
     pdf_canvas.save()
     return packet.getvalue()
@@ -1901,6 +2383,7 @@ def prepare_empty_build_subdirectories(
     output_dir: Path, report: dict[str, Any], *, create: bool
 ) -> bool:
     """Require a fresh build surface so stale claim PDFs cannot be mixed in."""
+    existing_blockers = len(report["blockers"])
     paths = [output_dir / name for name in BUILD_SUBDIRECTORY_NAMES]
     for path in paths:
         if path.is_symlink():
@@ -1935,8 +2418,8 @@ def prepare_empty_build_subdirectories(
                     "OUTPUT_DIRECTORY_READ",
                     f"cannot inspect {path.name}: {exc}",
                 )
-    if report["blockers"] or not create:
-        return not report["blockers"]
+    if len(report["blockers"]) > existing_blockers or not create:
+        return len(report["blockers"]) == existing_blockers
     for path in paths:
         try:
             path.mkdir(mode=0o700, parents=False, exist_ok=True)
@@ -1948,7 +2431,126 @@ def prepare_empty_build_subdirectories(
                 "OUTPUT_DIRECTORY_CREATE",
                 f"cannot prepare {path.name}: {exc}",
             )
-    return not report["blockers"]
+    return len(report["blockers"]) == existing_blockers
+
+
+def load_source_pages(
+    included: list[Selection], report: dict[str, Any]
+) -> dict[str, list[Any]] | None:
+    pages: dict[str, list[Any]] = {}
+    failed = False
+    for selection in included:
+        document_id = str(selection.document.get("id"))
+        try:
+            pages[document_id] = selection_pages(selection)
+        except Exception as exc:
+            failed = True
+            issue(
+                report,
+                "blocker",
+                "SOURCE_READ_DURING_BUILD",
+                f"cannot read source pages during build: {exc}",
+                document_id=document_id,
+            )
+    return None if failed else pages
+
+
+def assemble_master(
+    manifest: dict[str, Any],
+    report: dict[str, Any],
+    selections: list[Selection],
+    source_page_cache: dict[str, list[Any]],
+) -> tuple[bytes, int, str] | None:
+    """Return the review master (cover, index, and every included page)."""
+    case_slug = slugify(str(manifest.get("case", {}).get("case_id", "claim")), "claim")
+    included = [item for item in selections if item.document.get("decision") == "include"]
+    try:
+        provisional = make_cover_pdf(manifest, report, selections, 0)
+        cover_pages = len(PdfReader(BytesIO(provisional)).pages)
+        cover_payload = provisional
+        for _ in range(3):
+            candidate = make_cover_pdf(manifest, report, selections, cover_pages)
+            candidate_pages = len(PdfReader(BytesIO(candidate)).pages)
+            cover_payload = candidate
+            if candidate_pages == cover_pages:
+                break
+            cover_pages = candidate_pages
+
+        master_writer = PdfWriter()
+        cover_reader = PdfReader(BytesIO(cover_payload))
+        for page in cover_reader.pages:
+            master_writer.add_page(page)
+        packet_cursor = cover_pages
+        for selection in included:
+            document_id = str(selection.document.get("id"))
+            start_index = packet_cursor
+            for page in source_page_cache[document_id]:
+                master_writer.add_page(page)
+                packet_cursor += 1
+            title = str(
+                selection.document.get("document_type")
+                or selection.document.get("id")
+            )
+            master_writer.add_outline_item(title, start_index)
+        master_writer.add_metadata({"/Title": f"Claim review {case_slug}"})
+        master_payload = writer_bytes(master_writer)
+        master_page_count, master_hash = verify_pdf_bytes(master_payload, packet_cursor)
+    except Exception as exc:
+        issue(report, "blocker", "OUTPUT_VERIFY", f"review master: {exc}")
+        return None
+    return master_payload, master_page_count, master_hash
+
+
+def sources_changed_since_audit(included: list[Selection], report: dict[str, Any]) -> bool:
+    for selection in included:
+        try:
+            if sha256_file(selection.source.path) == selection.source.sha256:
+                continue
+        except OSError:
+            pass
+        issue(
+            report,
+            "blocker",
+            "SOURCE_CHANGED_DURING_BUILD",
+            "one or more source files changed while the packet was being built; rerun the audit",
+        )
+        return True
+    return False
+
+
+def build_draft_packet(
+    manifest: dict[str, Any],
+    report: dict[str, Any],
+    selections: list[Selection],
+    output_dir: Path,
+) -> None:
+    """Write a REVIEW_ONLY master that lists what is still needed; never upload files."""
+    included = [item for item in selections if item.document.get("decision") == "include"]
+    if not included or not prepare_empty_build_subdirectories(output_dir, report, create=True):
+        return
+    source_page_cache = load_source_pages(included, report)
+    if source_page_cache is None:
+        return
+    master = assemble_master(manifest, report, selections, source_page_cache)
+    if master is None or sources_changed_since_audit(included, report):
+        return
+    payload, page_count, digest = master
+    case_slug = slugify(str(manifest.get("case", {}).get("case_id", "claim")), "claim")
+    master_path = output_dir / "REVIEW_ONLY" / f"{case_slug}-DRAFT-review.pdf"
+    try:
+        secure_write_new(master_path, payload)
+    except OSError as exc:
+        issue(report, "blocker", "OUTPUT_WRITE", f"could not write draft review packet: {exc}")
+        return
+    report["outputs"].append(
+        {
+            "purpose": "draft review-only master (not ready to upload)",
+            "path": str(master_path),
+            "pages": page_count,
+            "bytes": len(payload),
+            "sha256": digest,
+        }
+    )
 
 
 def build_packets(
@@ -2010,20 +2612,8 @@ def build_packets(
         report["status"] = "NOT_READY"
         return
 
-    source_page_cache: dict[str, list[Any]] = {}
-    for selection in included:
-        document_id = str(selection.document.get("id"))
-        try:
-            source_page_cache[document_id] = selection_pages(selection)
-        except Exception as exc:
-            issue(
-                report,
-                "blocker",
-                "SOURCE_READ_DURING_BUILD",
-                f"cannot read source pages during build: {exc}",
-                document_id=document_id,
-            )
-    if report["blockers"]:
+    source_page_cache = load_source_pages(included, report)
+    if source_page_cache is None:
         report["status"] = "NOT_READY"
         return
 
@@ -2040,13 +2630,8 @@ def build_packets(
         if expected_pages == 0:
             issue(report, "blocker", "EMPTY_PACK", f"pack has no pages: {pack_id}")
             continue
-        writer.add_metadata(
-            {
-                "/Title": pack_id,
-                "/Author": "Indian Health Insurance Claim Help skill",
-                "/Subject": "Clean source-evidence upload bundle",
-            }
-        )
+        # Upload files carry only a neutral title, never this tool's name.
+        writer.add_metadata({"/Title": pack_id})
         payload = writer_bytes(writer)
         try:
             page_count, digest = verify_pdf_bytes(payload, expected_pages)
@@ -2165,47 +2750,11 @@ def build_packets(
         report, verification.get("portal_rules_confirmed") is True
     )
 
-    try:
-        provisional = make_cover_pdf(manifest, report, selections, 0)
-        cover_pages = len(PdfReader(BytesIO(provisional)).pages)
-        cover_payload = provisional
-        for _ in range(3):
-            candidate = make_cover_pdf(manifest, report, selections, cover_pages)
-            candidate_pages = len(PdfReader(BytesIO(candidate)).pages)
-            cover_payload = candidate
-            if candidate_pages == cover_pages:
-                break
-            cover_pages = candidate_pages
-
-        master_writer = PdfWriter()
-        cover_reader = PdfReader(BytesIO(cover_payload))
-        for page in cover_reader.pages:
-            master_writer.add_page(page)
-        packet_cursor = cover_pages
-        for selection in included:
-            document_id = str(selection.document.get("id"))
-            start_index = packet_cursor
-            for page in source_page_cache[document_id]:
-                master_writer.add_page(page)
-                packet_cursor += 1
-            title = str(
-                selection.document.get("document_type")
-                or selection.document.get("id")
-            )
-            master_writer.add_outline_item(title, start_index)
-        master_writer.add_metadata(
-            {
-                "/Title": f"Claim review {case_slug}",
-                "/Author": "Indian Health Insurance Claim Help skill",
-                "/Subject": "Private reimbursement claim review packet",
-            }
-        )
-        master_payload = writer_bytes(master_writer)
-        master_page_count, master_hash = verify_pdf_bytes(master_payload, packet_cursor)
-    except Exception as exc:
-        issue(report, "blocker", "OUTPUT_VERIFY", f"review master: {exc}")
+    master = assemble_master(manifest, report, selections, source_page_cache)
+    if master is None:
         report["status"] = "NOT_READY"
         return
+    master_payload, master_page_count, master_hash = master
 
     master_path = review_dir / f"{case_slug}-master-review.pdf"
     pack_paths = {
@@ -2234,21 +2783,7 @@ def build_packets(
         report["status"] = "NOT_READY"
         return
 
-    changed_sources: list[str] = []
-    for selection in included:
-        try:
-            if sha256_file(selection.source.path) != selection.source.sha256:
-                changed_sources.append(str(selection.source.path))
-        except OSError:
-            changed_sources.append(str(selection.source.path))
-    changed_sources = sorted(set(changed_sources))
-    if changed_sources:
-        issue(
-            report,
-            "blocker",
-            "SOURCE_CHANGED_DURING_BUILD",
-            "one or more source files changed while the packet was being built; rerun the audit",
-        )
+    if sources_changed_since_audit(included, report):
         report["status"] = "NOT_READY"
         return
 
@@ -2329,8 +2864,16 @@ def main() -> int:
     packet_entries_before_command = packet_surface_has_entries(output_dir)
     canonical_report_exists = canonical_json.exists() or canonical_markdown.exists()
     report, selections = audit_manifest(manifest, manifest_path)
+    draft_refused: list[str] = []
     if args.command == "build" and not report["blockers"]:
         build_packets(manifest, report, selections, output_dir)
+    elif args.command == "build" and args.draft:
+        draft_refused = sorted(
+            {str(item["code"]) for item in report["blockers"]} - DRAFT_ALLOWED_BLOCKERS
+        )
+        if not draft_refused:
+            build_draft_packet(manifest, report, selections, output_dir)
+    write_calendar(output_dir, report, manifest)
     report_stem = (
         "claim-audit-attempt"
         if packet_entries_before_command and canonical_report_exists
@@ -2341,6 +2884,12 @@ def main() -> int:
     print(f"Status: {report['status']}")
     print(f"Blockers: {len(report['blockers'])}; warnings: {len(report['warnings'])}")
     print(f"Audit: {markdown_path}")
+    if draft_refused:
+        print(f"Draft not built; fix these first: {', '.join(draft_refused)}")
+    elif args.command == "build" and report["blockers"]:
+        drafts = [item["path"] for item in report["outputs"] if item["purpose"].startswith("draft")]
+        if drafts:
+            print(f"Draft review packet (not ready to upload): {drafts[0]}")
     return 2 if report["blockers"] else 0
 
 
