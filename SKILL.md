@@ -1,6 +1,6 @@
 ---
 name: indian-health-insurance-claim-help
-description: Prepare Indian health-insurance reimbursement claims for hospital, day-care and pre/post costs. Lists needed documents, finds missing bills, reports and receipts, builds upload PDFs.
+description: Prepare Indian health-insurance (mediclaim) reimbursement claims for hospital, day-care and pre/post costs. Lists needed documents, finds missing bills, reports and receipts, builds upload PDFs.
 ---
 
 # Indian Health Insurance Claim Help
@@ -50,7 +50,7 @@ Run the helpers from the skill folder with Python 3.11 or newer. If `pypdf`, `re
 3. Fill `claim-manifest.json`. Read [references/manifest.md](references/manifest.md) before editing it.
    Keep copied evidence under the private case directory and set `rules.source_roots` (normally `["input"]`) so every source file must be explicitly included or excluded.
    Use `delivery_mode: standalone` for a digitally signed or interactive-form PDF so the clean output remains byte-for-byte identical.
-4. Reconcile every requested expense using [references/document-checklist.md](references/document-checklist.md). A bill and its receipt describe one expense, not two. Match prescription/advice, report, bill, and receipt to one stable expense ID using visible patient/provider, date, invoice number, item/service, and amount. Never guess from a filename alone. If a match is ambiguous, leave it unlinked and ask the claimant to identify the exact source file and page. Advice or a prescription must be dated on or before the bill it supports, and each bill belongs to one phase (pre, hospitalization, or post). If a required item is absent, name the expense and ask for that exact report, bill, or receipt; offer a ready message from [references/messages.md](references/messages.md).
+4. Reconcile every requested expense using [references/document-checklist.md](references/document-checklist.md). A bill and its receipt describe one expense, not two. Match prescription/advice, report, bill, and receipt to one stable expense ID using visible patient/provider, date, invoice number, item/service, and amount. Never guess from a filename alone. Record an itemized bill's `line_items` and its receipts' `payments` in the manifest so the audit checks both sums. If a match is ambiguous, leave it unlinked and ask the claimant to identify the exact source file and page. Advice or a prescription must be dated on or before the bill it supports, and each bill belongs to one phase (pre, hospitalization, or post). If a required item is absent, name the expense and ask for that exact report, bill, or receipt; offer a ready message from [references/messages.md](references/messages.md).
 5. Audit before building:
 
    ```bash

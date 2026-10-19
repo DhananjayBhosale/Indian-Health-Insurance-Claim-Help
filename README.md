@@ -49,7 +49,7 @@ It never invents a diagnosis, invoice, amount, signature, explanation, or paid s
 
 ## Privacy
 
-Your files go only to the AI service you choose to use. Share only the pages the claim needs, mask your Aadhaar number (last 4 digits visible), and delete the chat when you are done. Keep paper originals, signed forms, and X-ray or scan films safe.
+Your files go only to the AI service you choose to use. Before you start, turn off model training in its settings (ChatGPT: Settings > Data controls; Claude: Settings > Privacy), so the chat stays available while the claim is open. In Gemini, turning off Keep Activity also stops saving your chats, so finish in one sitting. Use a temporary chat only if you will finish the whole claim in one sitting. Share only the pages the claim needs, mask your Aadhaar number (last 4 digits visible), and delete the chat once the claim is settled. Keep paper originals, signed forms, and X-ray or scan films safe.
 
 ## Outputs in packet mode
 
@@ -76,7 +76,6 @@ The [official-source map](references/insurer-sources.md) covers the current IRDA
 
 ```bash
 python3 -m unittest discover -s tests -v
-codex-validate-skill .
 ```
 
 After changing `GUIDE.md`, run the [chat scenarios](tests/chat-scenarios.md).

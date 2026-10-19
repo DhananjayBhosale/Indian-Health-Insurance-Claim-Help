@@ -8,7 +8,7 @@ IRDAI's current rosters list 25 ordinary general insurers and 7 standalone healt
 
 ## Precedence
 
-Use this order when instructions differ:
+IRDAI regulations bind both the policy and the portal. Within them, the policy wording decides what is covered and the portal decides how files are uploaded. Use this order when instructions differ:
 
 1. Current authenticated portal or written claim query for this claim.
 2. Exact policy wording, schedule/customer information sheet, and current product/UIN claim form.

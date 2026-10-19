@@ -4,7 +4,7 @@ Manual checks for [GUIDE.md](../GUIDE.md). Paste GUIDE.md into a new chat, then 
 
 A run passes when every Expected line holds. Run all six after any change to GUIDE.md and update the line below.
 
-Last run: 2026-10-19, after the review changes (two filing deadlines, passed deadlines, bills uploaded once), 5/6 with Claude Sonnet, blind, files described in text rather than attached. Scenario 1 is the weak spot: in most runs that day, at least one Hindi document name had no English in brackets, though lists improved after the rule was changed to "each time".
+Last run: 2026-10-19, after the third review (policy wording, service dates by phase, post window passed, brackets in tables), 5/6 with Claude Sonnet, blind, files described in text rather than attached, before the final Step 2 wording (ask the user's reason only if filing is late). Scenario 1 is still the weak spot: lists, tables, and the missing-item line were bracketed, but a few Hindi words for bills in a question, a deadline row, and running text were not. The run before the bracket and post-window changes scored 4/6.
 
 Also run 2026-10-19 in the ChatGPT web app (temporary chat, files described in text): scenarios 1, 2, 3, and 6 passed. ChatGPT may show Step 1 as a fill-in form; typing the answers works too.
 
@@ -81,7 +81,7 @@ Full case, 2026-10-19: a synthetic gallbladder surgery claim with 12 attached im
 
 ### Expected
 
-- States the post-hospitalization end date (2026-07-31, counting from discharge) and asks the user to confirm the counting with the policy if unclear.
+- States the post-hospitalization range (2026-06-02 to 2026-07-31, counting from the day after discharge).
 - Flags PH-902 as outside the window and leaves ₹1,500 out of the claimed amount, with the reason.
 - Claims ₹800 for post-hospitalization.
 - Says the window has already ended (PH-902 is dated after it) and suggests filing now.
