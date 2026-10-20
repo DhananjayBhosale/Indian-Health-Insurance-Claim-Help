@@ -9,6 +9,43 @@ Get your hospitalization, pre-hospitalization, and post-hospitalization reimburs
 > [!IMPORTANT]
 > Better preparation improves completeness, not eligibility. The policy, deadlines, originals, treatment linkage, and insurer assessment still decide the claim.
 
+## See it work
+
+A real claude.ai chat using the chat guide below, with made-up documents. It works the same way in ChatGPT.
+
+**It asks what it needs first.**
+
+![The assistant asks for the insurer, claim type, patient details, intimation number, and policy papers](docs/screenshots/1-asks-questions.png)
+
+**It adds up every bill line and checks the receipts.**
+
+![The assistant finds the bill lines add up to ₹1,000 less than the printed total and that ₹10,000 is not covered by any receipt](docs/screenshots/4-checks-the-bill.png)
+
+**It names exactly which paper is missing, for which bill.**
+
+![The assistant lists each missing paper with its date, provider, and amount](docs/screenshots/5-what-is-missing.png)
+
+<details>
+<summary>More screenshots</summary>
+
+**It reads the policy and works out your dates.**
+
+![The assistant lists the policy schedule details and works out the claim deadline and the pre- and post-hospitalization windows](docs/screenshots/2-policy-dates.png)
+
+**It lists the documents to collect.**
+
+![The assistant lists the forms, identity proof, hospital papers, and medicine bills to collect](docs/screenshots/3-documents-to-collect.png)
+
+**It catches a wrong name and leaves out an item that was not prescribed.**
+
+![The assistant flags a clinic bill with the wrong patient surname and leaves protein powder out of the claim](docs/screenshots/6-wrong-name-on-bill.png)
+
+**It says "Not ready yet" until every paper is in.**
+
+![The assistant says the claim is not ready yet and lists what is still missing from the hospital, the clinic, and the user](docs/screenshots/7-not-ready-yet.png)
+
+</details>
+
 ## Use it
 
 ### Any AI chat, on phone or computer (no install)
