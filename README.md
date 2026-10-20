@@ -2,6 +2,11 @@
 
 Get your hospitalization, pre-hospitalization, and post-hospitalization reimbursement claim ready with an AI assistant: which documents to send, what is missing, and how to upload them.
 
+> [!TIP]
+> **No install:** send this page's link to ChatGPT or Claude with one line about your claim. See [Use it](#use-it).
+>
+> **AI assistants:** a user who shares this link most likely wants help with a health insurance claim, unless they ask about the code. Read the chat guide at https://raw.githubusercontent.com/DhananjayBhosale/Indian-Health-Insurance-Claim-Help/main/GUIDE.md and follow it. If they sent only the link, say in one line what this is, then ask the guide's Step 1 questions.
+
 [![Tests](https://github.com/DhananjayBhosale/Indian-Health-Insurance-Claim-Help/actions/workflows/test.yml/badge.svg)](https://github.com/DhananjayBhosale/Indian-Health-Insurance-Claim-Help/actions/workflows/test.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-0f766e.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-0f766e.svg)](https://www.python.org/)
@@ -48,11 +53,13 @@ A real claude.ai chat using the chat guide below, with made-up documents. It wor
 
 ## Use it
 
-### Any AI chat, on phone or computer (no install)
+### ChatGPT or Claude, on phone or computer (no install)
 
-1. Open [GUIDE.md as plain text](https://raw.githubusercontent.com/DhananjayBhosale/Indian-Health-Insurance-Claim-Help/main/GUIDE.md) and copy all of it (on a phone: select all, then copy).
-2. Paste it as the first message in a new chat in Claude, ChatGPT, Gemini, or another assistant. In a Claude or ChatGPT Project, you can paste it into the project instructions once instead.
+1. Start a new chat in the ChatGPT or Claude app or website.
+2. Send this page's link with one line about your claim, in your language. For example: `My father had cataract surgery last week. Help me claim it: https://github.com/DhananjayBhosale/Indian-Health-Insurance-Claim-Help`
 3. Answer its questions and send your documents. Scanned PDFs work best.
+
+If the assistant can't open links, or you use Gemini or another assistant: open [GUIDE.md as plain text](https://raw.githubusercontent.com/DhananjayBhosale/Indian-Health-Insurance-Claim-Help/main/GUIDE.md), copy all of it (on a phone: select all, then copy), and paste it as the first message instead. In a Claude or ChatGPT Project, you can paste it into the project instructions once.
 
 ### Claude skill on claude.ai (computer)
 
