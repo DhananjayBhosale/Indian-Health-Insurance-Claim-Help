@@ -17,6 +17,7 @@ submission-receipt.md
 *.jpeg
 *.tif
 *.tiff
+*.webp
 
 # README screenshots use made-up documents only.
-!docs/screenshots/*.png
+!docs/screenshots/*.webp
