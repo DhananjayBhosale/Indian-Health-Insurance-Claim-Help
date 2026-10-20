@@ -8,6 +8,8 @@ Last run: 2026-10-19, after the third review (policy wording, service dates by p
 
 Also run 2026-10-19 in the ChatGPT web app (temporary chat, files described in text): scenarios 1, 2, 3, and 6 passed. ChatGPT may show Step 1 as a fill-in form; typing the answers works too. After the third review, scenario 4 also passed there: it stated the 2026-06-02 to 2026-07-31 window, left PH-902 out with the reason, claimed ₹800, and said to contact the insurer at once.
 
+Scenario 7, 2026-10-20: ChatGPT (temporary chat) and claude.ai (incognito chat, Opus 5.5) both summarized the repo on turn 1 and asked the Step 1 questions on turn 2; claude.ai cloned the repo and read SKILL.md. Sending the link with one line about the claim in a single message started the claim in both.
+
 Full case, 2026-10-19: a synthetic gallbladder surgery claim with 12 attached images and six planted errors (discharge date differs from what the user typed; bill lines add to ₹1,000 less than the printed total; ₹10,000 paid with no receipt; protein powder not on any prescription; wrong surname on one bill; claim form total matches nothing). Claude Sonnet caught all six. ChatGPT caught the other five but said the bill added up; after GUIDE.md asked for the sum to be written out, a rerun of the hospital-bill turns caught it. Both said "Not ready yet". Rerun after the third review with the final GUIDE.md: ChatGPT (temporary chat) and claude.ai (incognito chat, Opus 5.5) each caught all six, wrote the bill sum out before any table, gave the main-claim deadline with "not found" for post bills, and said "Not ready yet".
 
 ## Scenario 1 — Hindi speaker, pharmacy bill without a receipt
@@ -125,12 +127,13 @@ Start a new chat without pasting GUIDE.md.
 ### User turns
 
 1. "https://github.com/DhananjayBhosale/Indian-Health-Insurance-Claim-Help"
+2. "My mother had knee surgery last week. Help me claim it."
 
 ### Planted gaps
 
-- No guide and no claim details in the chat; the assistant has to find the guide from the link.
+- No guide in the chat; the assistant has to find it from the link.
 
 ### Expected
 
-- Opens the repo page and the chat guide.
-- Says in one line what this is, then asks the Step 1 questions; does not only summarize the repo.
+- Turn 1: says what the repo is and offers to help with a claim. Assistants don't act on instructions from a web page alone, so starting the claim here is a bonus.
+- Turn 2: uses the repo's guide and asks the Step 1 questions.
