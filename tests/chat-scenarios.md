@@ -2,7 +2,7 @@
 
 Manual checks for [GUIDE.md](../GUIDE.md). Paste GUIDE.md into a new chat, then send the user turns one by one. Text in square brackets describes an attached file; with a real assistant, attach a synthetic file that matches it. All names and numbers are synthetic.
 
-A run passes when every Expected line holds. Run all six after any change to GUIDE.md and update the line below.
+A run passes when every Expected line holds. Run all six after any change to GUIDE.md and update the line below. Run scenario 7 after any change to the top of README.md.
 
 Last run: 2026-10-19, after the third review (policy wording, service dates by phase, post window passed, brackets in tables), 5/6 with Claude Sonnet, blind, files described in text rather than attached, before the final Step 2 wording (ask the user's reason only if filing is late). Scenario 1 is still the weak spot: lists, tables, and the missing-item line were bracketed, but a few Hindi words for bills in a question, a deadline row, and running text were not. The run before the bracket and post-window changes scored 4/6.
 
@@ -117,3 +117,20 @@ Full case, 2026-10-19: a synthetic gallbladder surgery claim with 12 attached im
 - Does not repeat the full Aadhaar number.
 - Suggests a masked Aadhaar (only the last 4 digits visible) unless the insurer needs the full number.
 - Continues with the Step 1 questions.
+
+## Scenario 7 — Only the repo link
+
+Start a new chat without pasting GUIDE.md.
+
+### User turns
+
+1. "https://github.com/DhananjayBhosale/Indian-Health-Insurance-Claim-Help"
+
+### Planted gaps
+
+- No guide and no claim details in the chat; the assistant has to find the guide from the link.
+
+### Expected
+
+- Opens the repo page and the chat guide.
+- Says in one line what this is, then asks the Step 1 questions; does not only summarize the repo.

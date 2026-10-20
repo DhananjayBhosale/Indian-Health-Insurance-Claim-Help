@@ -29,7 +29,7 @@ class SkillFileTests(unittest.TestCase):
     def test_chat_scenarios_are_complete(self) -> None:
         text = (SKILL_ROOT / "tests" / "chat-scenarios.md").read_text(encoding="utf-8")
         scenarios = re.split(r"^## Scenario \d+ ", text, flags=re.MULTILINE)[1:]
-        self.assertEqual(len(scenarios), 6)
+        self.assertEqual(len(scenarios), 7)
         for scenario in scenarios:
             for heading in ("### User turns", "### Planted gaps", "### Expected"):
                 with self.subTest(scenario=scenario.splitlines()[0], heading=heading):
