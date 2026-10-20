@@ -16,38 +16,42 @@ Get your hospitalization, pre-hospitalization, and post-hospitalization reimburs
 
 ## See it work
 
-A real claude.ai chat using the chat guide below, with made-up documents. It works the same way in ChatGPT.
+Real claude.ai and ChatGPT chats with made-up documents. Each one started with only the repo link and one line.
 
-**It asks what it needs first.**
+**Send the link with one line. It asks what it needs.**
 
-![The assistant asks for the insurer, claim type, patient details, intimation number, and policy papers](docs/screenshots/1-asks-questions.webp)
+![The user sends the repo link and asks for help with a claim; Claude reads the repo and asks for the insurer, claim type, patient and hospital details, intimation, and policy papers](docs/screenshots/1-opening-from-link.webp)
+
+**In ChatGPT, the same message opens a form with choices.**
+
+![ChatGPT shows a form with fields for the insurer, claim type options, patient, hospital, dates, intimation status, and which expenses to claim](docs/screenshots/2-chatgpt-form.webp)
 
 **It adds up every bill line and checks the receipts.**
 
-![The assistant finds the bill lines add up to ₹1,000 less than the printed total and that ₹10,000 is not covered by any receipt](docs/screenshots/4-checks-the-bill.webp)
+![Claude finds the bill lines add up to Rs. 1,000 less than the printed total and that Rs. 10,000 has no receipt](docs/screenshots/3-checks-the-bill.webp)
 
-**It names exactly which paper is missing, for which bill.**
+**It writes the message to fix a wrong name and says "Not ready yet".**
 
-![The assistant lists each missing paper with its date, provider, and amount](docs/screenshots/5-what-is-missing.webp)
+![Claude drafts a message asking the clinic to correct the patient name on a bill, then lists what is still needed from the hospital, the clinic, and the user](docs/screenshots/4-not-ready-yet.webp)
 
 <details>
 <summary>More screenshots</summary>
 
 **It reads the policy and works out your dates.**
 
-![The assistant lists the policy schedule details and works out the claim deadline and the pre- and post-hospitalization windows](docs/screenshots/2-policy-dates.webp)
+![Claude lists the policy schedule details and works out the pre- and post-hospitalization windows and the claim deadline](docs/screenshots/5-policy-dates.webp)
 
-**It lists the documents to collect.**
+**It lists the documents to send.**
 
-![The assistant lists the forms, identity proof, hospital papers, and medicine bills to collect](docs/screenshots/3-documents-to-collect.webp)
+![Claude lists the claim forms, identity proof, bank proof, hospital papers, and medicine bills to send](docs/screenshots/6-documents-to-send.webp)
 
-**It catches a wrong name and leaves out an item that was not prescribed.**
+**It names what is still missing and flags a waiting period.**
 
-![The assistant flags a clinic bill with the wrong patient surname and leaves protein powder out of the claim](docs/screenshots/6-wrong-name-on-bill.webp)
+![Claude lists the papers still needed from the hospital and the user and warns about a possible waiting period for gallstone surgery](docs/screenshots/7-still-needed.webp)
 
-**It says "Not ready yet" until every paper is in.**
+**It writes the message for the hospital billing desk.**
 
-![The assistant says the claim is not ready yet and lists what is still missing from the hospital, the clinic, and the user](docs/screenshots/7-not-ready-yet.webp)
+![Claude drafts a message asking the hospital for the itemized bill, operation notes, reports, admission advice, receipts, and claim form Part B](docs/screenshots/8-message-for-hospital.webp)
 
 </details>
 
@@ -56,7 +60,7 @@ A real claude.ai chat using the chat guide below, with made-up documents. It wor
 ### ChatGPT or Claude, on phone or computer (no install)
 
 1. Start a new chat in the ChatGPT or Claude app or website.
-2. Send this page's link with one line about your claim, in your language. For example: `My father had cataract surgery last week. Help me claim it: https://github.com/DhananjayBhosale/Indian-Health-Insurance-Claim-Help`
+2. Send this page's link with one line about your claim, in your language. For example: `https://github.com/DhananjayBhosale/Indian-Health-Insurance-Claim-Help Help me file my claim for my medical expenses with this.`
 3. Answer its questions and send your documents. Scanned PDFs work best.
 
 If the assistant can't open links, or you use Gemini or another assistant: open [GUIDE.md as plain text](https://raw.githubusercontent.com/DhananjayBhosale/Indian-Health-Insurance-Claim-Help/main/GUIDE.md), copy all of it (on a phone: select all, then copy), and paste it as the first message instead. In a Claude or ChatGPT Project, you can paste it into the project instructions once.
